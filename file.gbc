@@ -1,0 +1,50 @@
+section Main::Main
+0
+
+end Main::Main
+allocate % lTtxWduqtCDMLxiDHIMGFpXzpLGIehps
+push 1 @lTtxWduqtCDMLxiDHIMGFpXzpLGIehps
+push 2 @lTtxWduqtCDMLxiDHIMGFpXzpLGIehps
+push 9 @lTtxWduqtCDMLxiDHIMGFpXzpLGIehps
+
+allocate % XnkuHMYZLfGaEFPyynhwJyzAHyfjXUlr
+push "One" @XnkuHMYZLfGaEFPyynhwJyzAHyfjXUlr
+push "Two" @XnkuHMYZLfGaEFPyynhwJyzAHyfjXUlr
+
+db Main::Main__args @XnkuHMYZLfGaEFPyynhwJyzAHyfjXUlr
+db Main::Main__parse false
+call Main::Main
+
+cmp 0 0
+section LwQvuyNhYFmBZHeAerqyNEUzXPFGkqEG
+db Main::Main__args "None"
+db Main::Main__parse false
+call Main::Main
+ret
+end LwQvuyNhYFmBZHeAerqyNEUzXPFGkqEG
+jz LwQvuyNhYFmBZHeAerqyNEUzXPFGkqEG
+
+cmp 0 0
+section TOWeLrQKjLxzIivHSlcxgdXhhuTSkuxK
+db Main::Main__args "String"
+db Main::Main__parse false
+call Main::Main
+ret
+end TOWeLrQKjLxzIivHSlcxgdXhhuTSkuxK
+jz TOWeLrQKjLxzIivHSlcxgdXhhuTSkuxK
+
+cmp 0 0
+section cbWwNbeHVIkPZBSpYuLyYggwexjxusrB
+allocate % PjfweXhSUkMhPjMaxKlMIJMOXcnQfyze
+push 1 @PjfweXhSUkMhPjMaxKlMIJMOXcnQfyze
+push 2 @PjfweXhSUkMhPjMaxKlMIJMOXcnQfyze
+push 3 @PjfweXhSUkMhPjMaxKlMIJMOXcnQfyze
+push 4 @PjfweXhSUkMhPjMaxKlMIJMOXcnQfyze
+
+db Main::Main__args @PjfweXhSUkMhPjMaxKlMIJMOXcnQfyze
+db Main::Main__parse true
+call Main::Main
+ret
+end cbWwNbeHVIkPZBSpYuLyYggwexjxusrB
+jz cbWwNbeHVIkPZBSpYuLyYggwexjxusrB
+

@@ -1,0 +1,8 @@
+*.g
+*.o
+*.exe
+*.def
+*.dll
+test
+Other/
+vendor/

@@ -1,5 +1,14 @@
 {
     "type": "executable",
     "output": "main",
-    "toolchain": "x86-mingw-"
+    "toolchain": "",
+    "sources": ["./basic.g"],
+    "dependencies": [
+        {
+            "type": "library",
+            "output": "basic.o",
+            "sources": ["./basic.c"],
+            "c": true
+        }
+    ]
 }

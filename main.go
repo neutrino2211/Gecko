@@ -22,7 +22,6 @@ func runCmdWithOutput(cmd *exec.Cmd) {
 	stdout, _ := cmd.StdoutPipe()
 	cmd.Start()
 	oneByte := make([]byte, 100)
-	num := 1
 	for {
 		_, err := stdout.Read(oneByte)
 		if err != nil {
@@ -32,10 +31,6 @@ func runCmdWithOutput(cmd *exec.Cmd) {
 		r := bufio.NewReader(stdout)
 		line, _, _ := r.ReadLine()
 		fmt.Println(string(line))
-		num = num + 1
-		if num > 3 {
-			os.Exit(0)
-		}
 	}
 
 	cmd.Wait()

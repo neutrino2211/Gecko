@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 
 	"github.com/alecthomas/participle"
@@ -25,8 +26,14 @@ import (
 type buildConfig struct {
 	Type         string
 	Output       string
+	Sources      []string
+	Headers      []string
 	Toolchain    string
-	Dependencies []string
+	Dependencies []*buildConfig
+	C            bool
+	Root         bool
+
+	Command *CompileCommand
 }
 
 var (
@@ -94,22 +101,72 @@ func parseFile(filename string) *tokens.File {
 	return ast
 }
 
-func build(sources []string, cfg *buildConfig) {
-	cwd, _ := os.Getwd()
-	outfile := cwd + string(os.PathSeparator) + cfg.Output
+func build(sources []string, cfg *buildConfig) []string {
+	outDir, _ := os.Getwd()
 	format := cfg.Type
 	generateHeader := cfg.Type == "library"
 
-	inputFiles := sources
+	var inputFiles []string
 
-	// repr.Println(inputFiles, outfile, format, gccFlags)
+	if len(sources) > 0 {
+		inputFiles = sources
+	} else {
+		inputFiles = cfg.Sources
+	}
+
+	outputs := []string{}
+
+	if len(cfg.Dependencies) > 0 {
+		for _, dependency := range cfg.Dependencies {
+			dependency.Command = cfg.Command
+			dependencyOutputs := build([]string{}, dependency)
+			outputs = append(outputs, dependencyOutputs...)
+		}
+	}
 
 	for _, inputFile := range inputFiles {
+		_, outFile := path.Split(inputFile)
+
+		println(len(sources))
+
+		if len(sources) == 0 {
+			possibleOutDir, outputFile := path.Split(cfg.Command.Values["build"])
+			outFile = outputFile
+			outDir = possibleOutDir
+			println(possibleOutDir)
+			inputFile = path.Join(possibleOutDir, inputFile)
+		}
+
+		if outDir == "" {
+			outDir = "."
+		}
+
+		outfile := outDir + string(os.PathSeparator) + strings.ReplaceAll(cfg.Output, "$", outFile)
+
+		if cfg.C {
+
+			if format != "library" {
+				args := []string{"gcc", inputFile, "-o", outfile}
+				cmd := exec.Command(args[0], args[1:len(args)]...)
+				streamCommand(cmd)
+			} else if format == "library" {
+				args := []string{"gcc", "-c", inputFile, "-I.", "-o", outfile}
+				cmd := exec.Command(args[0], args[1:len(args)]...)
+				streamCommand(cmd)
+			}
+
+			outputs = append(outputs, outfile)
+
+			continue
+		}
+
 		_ast := parseFile(inputFile)
 		println(inputFile[len(inputFile)-2 : len(inputFile)-1])
+
 		if inputFile[len(inputFile)-2:len(inputFile)] != ".g" {
 			break
 		}
+
 		i := 0
 		for i < len(_ast.Entries) {
 			entry := _ast.Entries[i]
@@ -128,7 +185,6 @@ func build(sources []string, cfg *buildConfig) {
 		geckoAst := &ast.Ast{}
 		geckoAst.Initialize()
 
-		// v := _ast.Imports[0].Entries[1].Field.Value
 		_ast.Entries = append(_ast.Entries,
 			&tokens.Entry{
 				Field: &tokens.Field{
@@ -142,15 +198,6 @@ func build(sources []string, cfg *buildConfig) {
 				},
 			},
 		)
-
-		// if *format != "object" {
-		// 	_ast.Entries = append(_ast.Entries, &tokens.Entry{
-		// 		FuncCall: &tokens.FuncCall{
-		// 			Function:  "Main",
-		// 			Arguments: []*tokens.Argument{},
-		// 		},
-		// 	})
-		// }
 
 		a, ctx := compiler.CompilePass(_ast, geckoAst, true)
 
@@ -171,9 +218,6 @@ func build(sources []string, cfg *buildConfig) {
 
 			os.Exit(1)
 		}
-
-		// repr.Println(ctx.Steps, ctx.Code(), a.CPreliminary)
-		// repr.Println(ctx)
 		code := ctx.Code()
 
 		codeLines := strings.Split(code, "\n")
@@ -216,8 +260,7 @@ func build(sources []string, cfg *buildConfig) {
 		}
 
 		filePath := directory + inputFile[0:len(inputFile)-1] + "c"
-		paths := strings.Split(filePath, string(os.PathSeparator))
-		err := os.MkdirAll(strings.Join(paths[0:len(paths)-1], string(os.PathSeparator)), 0755)
+		err := os.MkdirAll(path.Dir(filePath), 0755)
 		err = ioutil.WriteFile(filePath, []byte(code), 0755)
 
 		if err != nil {
@@ -225,15 +268,22 @@ func build(sources []string, cfg *buildConfig) {
 		}
 
 		if format != "library" {
-			args := []string{"gcc", filePath, "-o", outfile}
+			args := []string{"gcc", "-o", outfile, filePath}
+			args = append(args, outputs...)
 			cmd := exec.Command(args[0], args[1:len(args)]...)
 			streamCommand(cmd)
 		} else if format == "library" {
-			args := []string{"gcc", "-c", filePath, "-I.", "-o", outfile}
+			args := []string{"gcc", "-I.", "-o", outfile, "-c", filePath}
+			args = append(args, outputs...)
+			repr.Println("ARGS:", strings.Join(args, " "))
 			cmd := exec.Command(args[0], args[1:len(args)]...)
 			streamCommand(cmd)
 		}
+
+		outputs = append(outputs, outfile)
 	}
+
+	return outputs
 }
 
 func readBuildJson(file string, cfg *buildConfig) {
@@ -273,5 +323,10 @@ func (c *CompileCommand) Run() {
 
 	repr.Println(cfg)
 
-	build(c.Positionals, cfg)
+	cfg.Command = c
+	cfg.Root = true
+
+	outputs := build(c.Positionals, cfg)
+
+	repr.Println(outputs)
 }

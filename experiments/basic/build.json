@@ -1,0 +1,5 @@
+{
+    "type": "executable",
+    "output": "main",
+    "toolchain": "x86-mingw-"
+}

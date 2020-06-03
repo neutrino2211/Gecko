@@ -16,6 +16,7 @@ type File struct {
 	PackageName string   `["package" @Ident]`
 	Entries     []*Entry `@@*`
 	Imports     []*File
+	Name        string
 }
 
 type Entry struct {

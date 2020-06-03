@@ -6,8 +6,12 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/neutrino2211/Gecko/ast"
+	"github.com/neutrino2211/Gecko/config"
+
 	"github.com/neutrino2211/Gecko/commander"
 	"github.com/neutrino2211/Gecko/commands"
+	"github.com/neutrino2211/Gecko/logger"
 )
 
 func fileExists(filename string) bool {
@@ -41,10 +45,28 @@ func main() {
 
 	//flags
 
-	cmd := &commander.Commander{}
+	logger.SetDefaultChannel("Gecko")
+
+	cmd := &commander.Commander{
+		Ready: func() {
+			ast.Init()
+			config.Init()
+		},
+	}
 	cmd.Init()
 
-	cmd.Register("compile", &commands.CompileCommand{})
+	cmd.RegisterOption("debug", &commander.Listener{
+		Option: &commander.Optional{
+			Type:        "int",
+			Description: "Set gecko's debug level (0 = quiet, 1 = show compile logs, 2 = verbose compile logs)",
+		},
+
+		Method: func(number interface{}) {
+			logger.SetDefaultDebugMode(int(number.(int64)))
+		},
+	})
+
+	cmd.RegisterCommands(commands.GeckoCommands)
 
 	cmd.Parse(os.Args)
 

@@ -1,7 +1,13 @@
 package ast
 
 import (
+	"github.com/fatih/color"
+	"github.com/neutrino2211/Gecko/logger"
 	"github.com/neutrino2211/Gecko/tokens"
+)
+
+var (
+	astLogger = &logger.Logger{}
 )
 
 type Variable struct {
@@ -28,6 +34,10 @@ type Class struct {
 	Scope      *Ast
 }
 
+func Init() {
+	astLogger.Init("ast", 5)
+}
+
 // Ast : Structure for .g ASTs not participle ASTs
 type Ast struct {
 	Variables    map[string]*Variable
@@ -49,6 +59,10 @@ func (a *Ast) Initialize() {
 }
 
 func (a *Ast) Merge(m *Ast) {
+	astLogger.DebugLogString("merging", m.GetFullPath(), "into", color.HiYellowString("'%s'", a.GetFullPath()))
+
+	a.CPreliminary += m.CPreliminary
+
 	if m.Variables != nil {
 		for _, v := range m.Variables {
 			if a.Variables[v.Name] == nil {
@@ -58,9 +72,11 @@ func (a *Ast) Merge(m *Ast) {
 	}
 
 	if m.Methods != nil {
-		for _, m := range m.Methods {
-			if a.Methods[m.Name] == nil {
-				a.Methods[m.Name] = m
+		for n, mthd := range m.Methods {
+			// astLogger.DebugLogString("trying to merge method", n, "into", a.Name)
+			if a.Methods[mthd.Name] == nil {
+				a.Methods[n] = mthd
+				astLogger.DebugLogString("merging method", mthd.Name, "from", m.Name, "into", color.HiYellowString("'%s'", a.Name))
 			}
 		}
 	}
@@ -83,6 +99,7 @@ func (a *Ast) Merge(m *Ast) {
 }
 
 func (a *Ast) MergeImport(m *Ast) {
+	astLogger.DebugLogString("merging import", m.Name, "into", color.HiYellowString("'%s'", a.Name))
 	for _, v := range m.Variables {
 		if v.Scope.Name == a.Name && v.Visibility == "protected" {
 			a.Variables[v.Scope.Name+"."+v.Name] = v
@@ -91,8 +108,9 @@ func (a *Ast) MergeImport(m *Ast) {
 		}
 	}
 
-	for _, m := range m.Methods {
-		a.Methods[m.Scope.Name+"."+m.Name] = m
+	for _, mthd := range m.Methods {
+		a.Methods[m.Name+"."+mthd.Name] = mthd
+		astLogger.DebugLogString("merging method", m.Name+"."+mthd.Name, "from imported package", m.Name, "into", color.HiYellowString("'%s'", a.Name))
 	}
 
 	for _, t := range m.Types {
@@ -110,6 +128,15 @@ func (a *Ast) GetFullPath() string {
 	}
 
 	return a.Name
+}
+
+func (a *Ast) MergeWithParents() {
+	parent := a.Parent
+
+	for parent != nil {
+		a.Merge(parent)
+		parent = parent.Parent
+	}
 }
 
 func (t *Type) Initialize() {
@@ -141,6 +168,7 @@ func (v *Variable) FromTypeField(tok *tokens.TypeField) {
 }
 
 func (v *Variable) GetFullPath() string {
+	println("getting path for", v.Name, "with scope", v.Scope.GetFullPath())
 	return v.Scope.GetFullPath() + "__" + v.Name
 }
 

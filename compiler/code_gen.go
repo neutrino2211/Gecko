@@ -3,8 +3,6 @@ package compiler
 import (
 	"math/rand"
 
-	"github.com/alecthomas/repr"
-
 	"github.com/neutrino2211/Gecko/ast"
 	"github.com/neutrino2211/Gecko/tokens"
 )
@@ -117,7 +115,6 @@ func codeify(v *tokens.Literal) string {
 
 		return arr
 	} else if v.ArrayIndex != nil {
-		repr.Println("============", v)
 		return ""
 	} else if len(v.Bool) > 0 {
 		return v.Bool
@@ -134,8 +131,9 @@ func (m *MethodCall) Code() string {
 	s := ""
 	a := ""
 	// repr.Println(m.Arguments)
-	for _, k := range *m.Arguments {
-		// repr.Println(a, k)
+	tmpArgs := *m.Arguments
+	for _, argName := range m.ArgumentOrder {
+		k := tmpArgs[argName]
 		instruction := codeify(k)
 		// identification := funk.ReverseString(strings.Split(funk.ReverseString(strings.Split(instruction, "\n")[0]), " ")[0])
 		// s = addCode(s, instruction)
@@ -174,10 +172,15 @@ func (c *Conditional) Code(ast *ast.Ast) string {
 
 func (e *Expression) Code(ast *ast.Ast) string {
 	flattenValue(e.Value, ast)
+
+	if e.Value.FuncCall != nil {
+		return buildMethodCallStep(e.Value.FuncCall, ast).Code()
+	} else {
+		return /*"auto " + strings.ReplaceAll(e.Name, "||", "::") + " = " +*/ codeify(e.Value)
+	}
 	// repr.Println(e.Value)
 	// repr.Println(e)
 	// return "# TODO EVALUATE EXPRESSIONS -> " + e.Name
-	return /*"auto " + strings.ReplaceAll(e.Name, "||", "::") + " = " +*/ codeify(e.Value)
 }
 
 func (ctx *ExecutionContext) Code() string {
@@ -201,7 +204,7 @@ func (ctx *ExecutionContext) Code() string {
 
 	for _, mthd := range ctx.Methods {
 		// mthd.As
-		println(mthd.Ast.Name, mthd.Ast.Parent.Methods[mthd.Ast.Name].Arguments)
+		compileLogger.DebugLogString("building method", mthd.Ast.Name)
 		s = addCode(s, GetTypeAsString(mthd.ReturnType, mthd.Ast)+" "+mthd.Ast.GetFullPath()+" ("+CreateMethArgs(mthd.Ast.Parent.Methods[mthd.Ast.Name].Arguments, mthd.Ast)+"){")
 		s = addCode(s, mthd.Code())
 		s = addCode(s, "}")

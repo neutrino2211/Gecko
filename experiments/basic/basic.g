@@ -1,7 +1,8 @@
 package Main
 
-external func greeting( a0: string): void {}
+import definitions
 
-func Main() : void {
-    greeting(a0: "World!")
+func Main(): void {
+    result: int! = greeting(a0: "World!")
+    printf(format: "Result is %u\n", a0: result)
 }

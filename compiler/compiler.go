@@ -1,14 +1,49 @@
 package compiler
 
 import (
-	"fmt"
+	"os"
+	"path"
 	"strconv"
+	"strings"
 
-	"github.com/alecthomas/repr"
+	"github.com/neutrino2211/Gecko/config"
+
+	"github.com/alecthomas/participle"
+	"github.com/alecthomas/participle/lexer"
+	"github.com/alecthomas/participle/lexer/ebnf"
+	"github.com/fatih/color"
+	"github.com/neutrino2211/Gecko/logger"
 
 	"github.com/neutrino2211/Gecko/ast"
 	"github.com/neutrino2211/Gecko/evaluate"
 	"github.com/neutrino2211/Gecko/tokens"
+)
+
+var (
+	compileLogger = &logger.Logger{}
+	graphQLLexer  = lexer.Must(ebnf.New(`
+Comment = "//"  { "\u0000"…"\uffff"-"\n" } .
+CCode = "#"  { "\u0000"…"\uffff"-"\n" } .
+Ident = (alpha | "_" | ".") { "_" | "." | alpha | digit } .
+String = "\"" [ { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } ] "\"" .
+Number = ( "0x" | "." | "_" | digit) { "0x" |"." | "_" | digit} .
+Whitespace = " " | "\t" | "\n" | "\r" .
+Digit = digit .
+Punct = "!"…"/" | ":"…"@" | "["…` + "\"`\"" + ` | "{"…"~" .
+alpha = "a"…"z" | "A"…"Z" .
+digit = "0"…"9" .
+EOL = ( "\n" | "\r" ) { "\n" | "\r" } .
+any = "\u0000"…"\uffff" .
+`))
+
+	parser = participle.MustBuild(&tokens.File{},
+		participle.Lexer(graphQLLexer),
+		participle.Elide("Comment", "Whitespace"),
+	)
+
+	cli struct {
+		Files []string `arg:"" type:"existingfile" required:"" help:"GraphQL schema files to parse."`
+	}
 )
 
 //MAJOR HACK to fix issue where compiler errors out in packages that are not main
@@ -52,7 +87,6 @@ func flattenArray(arr []*tokens.Literal, geckoAst *ast.Ast) {
 }
 
 func flattenValue(value *tokens.Literal, geckoAst *ast.Ast) {
-	repr.Println("======", value.ArrayIndex != nil)
 	if value.Expression != nil {
 		v, _ := evaluate.Evaluate(value.Expression, geckoAst)
 		value.Expression = nil
@@ -78,6 +112,34 @@ func flattenValue(value *tokens.Literal, geckoAst *ast.Ast) {
 	}
 }
 
+func ParseFile(filename string) *tokens.File {
+	ast := &tokens.File{}
+	baseDirectory, _ := path.Split(filename)
+	filePath := string(os.PathSeparator) + filename
+	wd, err := os.Getwd()
+	r, err := os.Open(wd + filePath)
+	compileLogger.DebugLogString("Trying import path", wd+filePath)
+	if err != nil {
+		r, err = os.Open(baseDirectory + filePath)
+		compileLogger.DebugLogString("Trying import path", baseDirectory+filePath)
+		if err != nil {
+			r, err = os.Open(config.GeckoConfig.StdLibPath + filePath)
+			if err != nil {
+				r, err = os.Open(config.GeckoConfig.ModulesPath + filePath)
+				if err != nil {
+					compileLogger.Error("Couldn't resolve import", filename)
+					os.Exit(1)
+				}
+			}
+		}
+	}
+	err = parser.Parse(r, ast)
+	r.Close()
+	ast.Name = filename
+
+	return ast
+}
+
 func CompileClassEntries(class *tokens.Class) []*tokens.Entry {
 	entries := make([]*tokens.Entry, 0)
 	for _, field := range class.Fields {
@@ -101,9 +163,12 @@ func CompileEntries(entries []*tokens.Entry, geckoAst *ast.Ast) *ast.Ast {
 			variable := &ast.Variable{}
 			variable.FromToken(entry.Field)
 			variable.Scope = geckoAst
-			repr.Println(entry.Field.Name)
-			if entry.Field.Value != nil && entry.Field.Value.Expression != nil {
-				flattenValue(entry.Field.Value, geckoAst)
+			if entry.Field.Value != nil {
+				if entry.Field.Value.FuncCall != nil {
+					entry.Field.Value.Symbol = entry.Field.Name
+				} else {
+					flattenValue(entry.Field.Value, geckoAst)
+				}
 			}
 
 			if variable.Value.Array != nil {
@@ -174,16 +239,31 @@ func CompileEntries(entries []*tokens.Entry, geckoAst *ast.Ast) *ast.Ast {
 			geckoAst.Types[_type.Name] = _type
 		} else if len(entry.CCode) > 1 {
 			// repr.Println(entry.CCode)
-			geckoAst.CPreliminary = geckoAst.CPreliminary + entry.CCode[1:len(entry.CCode)-1] + "\n"
+			geckoAst.CPreliminary = geckoAst.CPreliminary + entry.CCode[1:len(entry.CCode)] + "\n"
 		}
 	}
 
 	return geckoAst
 }
 
+func Init() {
+	compileLogger.Init("compiler engine", 2)
+}
+
 func CompilePass(entryFile *tokens.File, geckoAst *ast.Ast, buildAll bool) (*ast.Ast, *ExecutionContext) {
 	compiledAst := &ast.Ast{}
 	compiledAst.Initialize()
+	compiledAst.Name = entryFile.PackageName
+
+	compileLogger.DebugLogString("Transpiling", color.HiYellowString("'%s'", entryFile.Name))
+
+	for _, entry := range entryFile.Entries {
+		if len(entry.Import) > 0 {
+			importedFilePath := strings.ReplaceAll(entry.Import, ".", string(os.PathSeparator)) + ".g"
+			basePath, _ := path.Split(entryFile.Name)
+			entryFile.Imports = append(entryFile.Imports, ParseFile(path.Join(basePath, importedFilePath)))
+		}
+	}
 
 	var ctx *ExecutionContext
 
@@ -191,14 +271,16 @@ func CompilePass(entryFile *tokens.File, geckoAst *ast.Ast, buildAll bool) (*ast
 		importAst := &ast.Ast{}
 		importAst.Name = _import.PackageName
 		importAst.Initialize()
+		compileLogger.DebugLogString("Branching into imported package", color.HiYellowString("'%s'", _import.PackageName))
 		_ast, _ := CompilePass(_import, importAst, buildAll)
-		// repr.Println(c)
 		geckoAst.CPreliminary = _ast.CPreliminary + geckoAst.CPreliminary
-		compiledAst.MergeImport(_ast)
+		if _ast.Name == compiledAst.Name {
+			compileLogger.DebugLogString("imported package", _ast.Name, "is part of the base package", compiledAst.Name)
+			compiledAst.Merge(_ast)
+		} else {
+			compiledAst.MergeImport(_ast)
+		}
 	}
-
-	fmt.Println("Compiling package:", entryFile.PackageName)
-	compiledAst.Name = entryFile.PackageName
 	compiledAst.Merge(geckoAst)
 	compiledAst.Merge(CompileEntries(entryFile.Entries, compiledAst))
 	// repr.Println(compiledAst.GetFullPath(), compiledAst.Methods)

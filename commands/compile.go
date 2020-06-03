@@ -10,12 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"runtime"
 	"strings"
 
-	"github.com/alecthomas/participle"
-	"github.com/alecthomas/participle/lexer"
-	"github.com/alecthomas/participle/lexer/ebnf"
-	"github.com/alecthomas/repr"
+	"github.com/fatih/color"
 	"github.com/neutrino2211/Gecko/ast"
 	"github.com/neutrino2211/Gecko/commander"
 	"github.com/neutrino2211/Gecko/compiler"
@@ -32,35 +30,11 @@ type buildConfig struct {
 	Dependencies []*buildConfig
 	C            bool
 	Root         bool
+	Platform     string
+	Arch         string
 
 	Command *CompileCommand
 }
-
-var (
-	graphQLLexer = lexer.Must(ebnf.New(`
-Comment = "//"  { "\u0000"…"\uffff"-"\n" } .
-CCode = "#"  { "\u0000"…"\uffff"-"\n" } .
-Ident = (alpha | "_" | ".") { "_" | "." | alpha | digit } .
-String = "\"" [ { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } ] "\"" .
-Number = ( "0x" | "." | "_" | digit) { "0x" |"." | "_" | digit} .
-Whitespace = " " | "\t" | "\n" | "\r" .
-Digit = digit .
-Punct = "!"…"/" | ":"…"@" | "["…` + "\"`\"" + ` | "{"…"~" .
-alpha = "a"…"z" | "A"…"Z" .
-digit = "0"…"9" .
-EOL = ( "\n" | "\r" ) { "\n" | "\r" } .
-any = "\u0000"…"\uffff" .
-`))
-
-	parser = participle.MustBuild(&tokens.File{},
-		participle.Lexer(graphQLLexer),
-		participle.Elide("Comment", "Whitespace"),
-	)
-
-	cli struct {
-		Files []string `arg:"" type:"existingfile" required:"" help:"GraphQL schema files to parse."`
-	}
-)
 
 func streamPipe(std io.ReadCloser) {
 	buf := bufio.NewReader(std) // Notice that this is not in a loop
@@ -85,20 +59,12 @@ func streamCommand(cmd *exec.Cmd) {
 	streamPipe(stderr)
 }
 
-func parseFile(filename string) *tokens.File {
-	ast := &tokens.File{}
-	wd, err := os.Getwd()
-	if err != nil {
-		panic(err)
+func fileExists(filename string) bool {
+	info, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		return false
 	}
-	r, err := os.Open(wd + string(os.PathSeparator) + filename)
-	if err != nil {
-		panic(err)
-	}
-	err = parser.Parse(r, ast)
-	r.Close()
-
-	return ast
+	return !info.IsDir()
 }
 
 func build(sources []string, cfg *buildConfig) []string {
@@ -114,10 +80,27 @@ func build(sources []string, cfg *buildConfig) []string {
 		inputFiles = cfg.Sources
 	}
 
+	if cfg.Platform != runtime.GOOS {
+		cfg.Command.Error("platform mismatch, current platform is", runtime.GOOS, "but source(s)", strings.Join(inputFiles, ", "), "require", cfg.Platform)
+		return []string{}
+	}
+
+	if cfg.Arch != runtime.GOARCH {
+		cfg.Command.Error("arch mismatch, current arch is", runtime.GOARCH, "but source(s)", strings.Join(inputFiles, ", "), "require", cfg.Arch)
+		return []string{}
+	}
+
 	outputs := []string{}
 
 	if len(cfg.Dependencies) > 0 {
 		for _, dependency := range cfg.Dependencies {
+			if dependency.Platform == "" {
+				dependency.Platform = cfg.Platform
+			}
+
+			if dependency.Arch == "" {
+				dependency.Arch = cfg.Arch
+			}
 			dependency.Command = cfg.Command
 			dependencyOutputs := build([]string{}, dependency)
 			outputs = append(outputs, dependencyOutputs...)
@@ -127,13 +110,14 @@ func build(sources []string, cfg *buildConfig) []string {
 	for _, inputFile := range inputFiles {
 		_, outFile := path.Split(inputFile)
 
-		println(len(sources))
+		cfg.Command.DebugLog(len(sources))
+		var outputPath string
 
 		if len(sources) == 0 {
 			possibleOutDir, outputFile := path.Split(cfg.Command.Values["build"])
-			outFile = outputFile
+			outputPath = outputFile
 			outDir = possibleOutDir
-			println(possibleOutDir)
+			cfg.Command.DebugLogString(possibleOutDir)
 			inputFile = path.Join(possibleOutDir, inputFile)
 		}
 
@@ -141,46 +125,52 @@ func build(sources []string, cfg *buildConfig) []string {
 			outDir = "."
 		}
 
-		outfile := outDir + string(os.PathSeparator) + strings.ReplaceAll(cfg.Output, "$", outFile)
+		if cfg.Command.Values["output"] != "" {
+			outputPath = cfg.Command.Values["output"]
+		} else {
+			outputPath = outDir + string(os.PathSeparator) + strings.ReplaceAll(cfg.Output, "$", outFile)
+		}
 
 		if cfg.C {
 
-			if format != "library" {
-				args := []string{"gcc", inputFile, "-o", outfile}
+			cfg.Command.LogString("compiling C file", inputFile)
+
+			if format == "executable" {
+				args := []string{"gcc", inputFile, "-o", outputPath}
 				cmd := exec.Command(args[0], args[1:len(args)]...)
 				streamCommand(cmd)
 			} else if format == "library" {
-				args := []string{"gcc", "-c", inputFile, "-I.", "-o", outfile}
+				args := []string{"gcc", "-c", inputFile, "-I.", "-o", outputPath}
 				cmd := exec.Command(args[0], args[1:len(args)]...)
 				streamCommand(cmd)
 			}
 
-			outputs = append(outputs, outfile)
+			outputs = append(outputs, outputPath)
 
 			continue
 		}
-
-		_ast := parseFile(inputFile)
-		println(inputFile[len(inputFile)-2 : len(inputFile)-1])
 
 		if inputFile[len(inputFile)-2:len(inputFile)] != ".g" {
 			break
 		}
 
-		i := 0
-		for i < len(_ast.Entries) {
-			entry := _ast.Entries[i]
-			if len(entry.Import) > 0 {
-				_ast.Imports = append(_ast.Imports, parseFile(strings.ReplaceAll(entry.Import, ".", string(os.PathSeparator))+".g"))
-			} else if entry.If != nil {
-				if _ast.Entries[i-1].If == nil && _ast.Entries[i-1].ElseIf == nil {
-					fmt.Println("Good if statement")
-				} else if _ast.Entries[i-1].If != nil {
-					fmt.Println("Double if found at", entry.If.Pos.String())
-				}
-			}
-			i++
-		}
+		_ast := compiler.ParseFile(inputFile)
+		cfg.Command.DebugLogString(inputFile[len(inputFile)-2 : len(inputFile)-1])
+
+		// i := 0
+		// for i < len(_ast.Entries) {
+		// 	entry := _ast.Entries[i]
+		// 	if len(entry.Import) > 0 {
+
+		// 	} else if entry.If != nil {
+		// 		if _ast.Entries[i-1].If == nil && _ast.Entries[i-1].ElseIf == nil {
+		// 			cfg.Command.DebugLogString("Good if statement")
+		// 		} else if _ast.Entries[i-1].If != nil {
+		// 			cfg.Command.DebugLogString("Double if found at", entry.If.Pos.String())
+		// 		}
+		// 	}
+		// 	i++
+		// }
 
 		geckoAst := &ast.Ast{}
 		geckoAst.Initialize()
@@ -199,6 +189,7 @@ func build(sources []string, cfg *buildConfig) []string {
 			},
 		)
 
+		cfg.Command.LogString("compiling gecko package", _ast.PackageName)
 		a, ctx := compiler.CompilePass(_ast, geckoAst, true)
 
 		if format == "executable" && a.Methods["Main"] == nil {
@@ -245,7 +236,7 @@ func build(sources []string, cfg *buildConfig) []string {
 			code = code + "\nint main(" + mainArgs + "){Main__Main(" + passedArgs + "); return 0;}\n"
 		}
 
-		println(code)
+		cfg.Command.DebugLogString(code)
 
 		directory := os.TempDir() + string(os.PathSeparator)
 
@@ -267,20 +258,20 @@ func build(sources []string, cfg *buildConfig) []string {
 			panic(err)
 		}
 
-		if format != "library" {
-			args := []string{"gcc", "-o", outfile, filePath}
+		if format == "executable" {
+			args := []string{"gcc", "-o", outputPath, filePath}
 			args = append(args, outputs...)
 			cmd := exec.Command(args[0], args[1:len(args)]...)
 			streamCommand(cmd)
 		} else if format == "library" {
-			args := []string{"gcc", "-I.", "-o", outfile, "-c", filePath}
+			args := []string{"gcc", "-I.", "-o", outputPath, "-c", filePath}
 			args = append(args, outputs...)
-			repr.Println("ARGS:", strings.Join(args, " "))
+			cfg.Command.DebugLogString("ARGS:", strings.Join(args, " "))
 			cmd := exec.Command(args[0], args[1:len(args)]...)
 			streamCommand(cmd)
 		}
 
-		outputs = append(outputs, outfile)
+		outputs = append(outputs, outputPath)
 	}
 
 	return outputs
@@ -289,12 +280,12 @@ func build(sources []string, cfg *buildConfig) []string {
 func readBuildJson(file string, cfg *buildConfig) {
 	configFile, err := os.Open(file)
 	if err != nil {
-		println("opening config file", err.Error())
+		cfg.Command.Fatal("opening config file", err.Error())
 	}
 
 	jsonParser := json.NewDecoder(configFile)
 	if err = jsonParser.Decode(cfg); err != nil {
-		println("parsing config file", err.Error())
+		cfg.Command.Fatal("parsing config file", err.Error()+".", file, "might not be a json file")
 	}
 }
 
@@ -303,30 +294,60 @@ type CompileCommand struct {
 }
 
 func (c *CompileCommand) Init() {
-	c.Optionals = map[string]string{
-		"build":  "string",
-		"output": "string",
-		"64bit":  "bool",
+	c.Optionals = map[string]*commander.Optional{
+		"build": &commander.Optional{
+			Type:        "string",
+			Description: "Path to the project's build.json file.",
+		},
+		"output": &commander.Optional{
+			Type:        "string",
+			Description: "Output file path " + color.HiYellowString("(warning: this overrides the build configuration's output path)"),
+		},
 	}
 
-	c.Values = map[string]string{
-		"output": "main",
-	}
+	c.Usage = "gecko compile sources... [options]"
+
+	c.Values = map[string]string{}
+
+	c.Logger.Init(c.CommandName, 2)
+	c.Description = c.BuildHelp(help)
 }
 
 func (c *CompileCommand) Run() {
 	cfg := &buildConfig{}
+	compiler.Init()
+
+	cfg.Platform = runtime.GOOS
+	cfg.Arch = runtime.GOARCH
+	cfg.Command = c
 
 	if len(c.Values["build"]) != 0 {
 		readBuildJson(c.Values["build"], cfg)
+	} else if len(c.Positionals) == 0 {
+		c.Help()
+		return
 	}
 
-	repr.Println(cfg)
+	if c.Values["output"] != "" {
+		cfg.Output = c.Values["output"]
+	}
 
-	cfg.Command = c
+	c.DebugLog(cfg)
 	cfg.Root = true
 
 	outputs := build(c.Positionals, cfg)
 
-	repr.Println(outputs)
+	c.DebugLog(outputs)
+
+	if fileExists(outputs[len(outputs)-1]) {
+		color.Set(color.FgGreen)
+		c.LogString("output saved to", outputs[len(outputs)-1])
+		color.Unset()
+	} else {
+		c.Error("failed to save output to", outputs[len(outputs)-1], ". There should additional information above above")
+	}
 }
+
+var (
+	help = `compiles a gecko source file or a gecko project via a build.json file`
+)

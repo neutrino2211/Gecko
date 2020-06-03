@@ -1,13 +1,12 @@
 package compiler
 
 import (
+	"github.com/fatih/color"
 	"github.com/neutrino2211/Gecko/ast"
 	"github.com/neutrino2211/Gecko/errors"
 	"github.com/neutrino2211/Gecko/evaluate"
 	"github.com/neutrino2211/Gecko/tokens"
 	"github.com/neutrino2211/Gecko/utils"
-
-	"github.com/alecthomas/repr"
 
 	funk "github.com/thoas/go-funk"
 )
@@ -27,6 +26,7 @@ type MethodCall struct {
 	_step
 	MethodName     string
 	Arguments      *map[string]*tokens.Literal
+	ArgumentOrder  []string
 	MethodFullName string
 	External       bool
 }
@@ -60,7 +60,6 @@ func buildConditional(ctx *ExecutionContext, ifBlock interface{}, geckoAst *ast.
 	case *tokens.If:
 		ifBlock := ifBlock.(*tokens.If)
 		_bool, err := evaluate.Evaluate(ifBlock.Expression, geckoAst)
-		repr.Println(_bool)
 		if err != nil {
 			panic(err)
 		} else if utils.IsBool(_bool) {
@@ -118,12 +117,18 @@ func buildConditional(ctx *ExecutionContext, ifBlock interface{}, geckoAst *ast.
 func buildMethodCallStep(call *tokens.FuncCall, geckoAst *ast.Ast) *MethodCall {
 	mthdStep := &MethodCall{}
 	args := make(map[string]*tokens.Literal)
+	argsOrder := []string{}
 
 	// repr.Println(geckoAst.GetFullPath(), call.Function, geckoAst.Parent.Methods)
-	if geckoAst.Parent != nil {
-		geckoAst.Merge(geckoAst.Parent)
-	}
+	// if geckoAst.Parent != nil {
+	// 	geckoAst.Merge(geckoAst.Parent)
+	// }
 	mthd := geckoAst.Methods[call.Function]
+	compileLogger.DebugLogString("building call step for", call.Function)
+
+	if mthd == nil {
+		compileLogger.Fatal(color.HiRedString("Could not find method %s", call.Function))
+	}
 
 	for _, arg := range mthd.Arguments {
 		if arg.Default != nil {
@@ -133,14 +138,17 @@ func buildMethodCallStep(call *tokens.FuncCall, geckoAst *ast.Ast) *MethodCall {
 	}
 
 	for _, arg := range call.Arguments {
+		argsOrder = append(argsOrder, arg.Name)
 		if arg.Value != nil {
 			mthdAst := mthd.ToAst()
-			mthdAst.Merge(geckoAst)
+			// mthdAst.MergeWithParents()
 			mthdAst.Name = geckoAst.Name
 			// Hack for adding variables to function calls when their scope has not been finalized
 			if geckoAst.Parent != nil && geckoAst.Parent.Methods[geckoAst.Name] != nil {
-				mthdAst.Merge(CompileEntries(geckoAst.Parent.Methods[geckoAst.Name].Value, mthdAst))
+				mthdAst.Merge(CompileEntries(geckoAst.Parent.Methods[geckoAst.Name].Value, geckoAst))
 			}
+
+			compileLogger.DebugLogString("adding variable", arg.Name, "to", mthd.Name, "call")
 
 			// if arg.Value.Expression != nil {
 			// 	// repr.Println(evaluate.Evaluate(arg.Value.Expression, mthdAst))
@@ -156,9 +164,9 @@ func buildMethodCallStep(call *tokens.FuncCall, geckoAst *ast.Ast) *MethodCall {
 			// repr.Println(arg.Value)
 			valTmp := *arg.Value
 			errors.IgnoreNextError()
-			flattenValue(&valTmp, geckoAst)
+			flattenValue(&valTmp, mthdAst)
 			if errors.ErrorWasIgnored() {
-				flattenValue(arg.Value, mthdAst)
+				flattenValue(arg.Value, geckoAst)
 			} else {
 				arg.Value = &valTmp
 			}
@@ -168,8 +176,10 @@ func buildMethodCallStep(call *tokens.FuncCall, geckoAst *ast.Ast) *MethodCall {
 	mthdStep.MethodName = call.Function
 	mthdStep.Arguments = &args
 	mthdStep.External = mthd.Visibility == "external"
+	mthdStep.ArgumentOrder = argsOrder
 	if mthdStep.External {
-		mthdStep.MethodFullName = call.Function
+		// compileLogger.DebugLogString("method", mthd.Name, "is external", call.Function)
+		mthdStep.MethodFullName = mthd.Name
 	} else {
 		mthdStep.MethodFullName = mthd.GetFullPath()
 	}
@@ -187,12 +197,13 @@ func buildExecutionContext(entries []*tokens.Entry, geckoAst *ast.Ast, buildAll 
 	for _, entry := range entries {
 		if entry.FuncCall != nil {
 			mthd := geckoAst.Methods[entry.FuncCall.Function]
-			if mthd != nil && !funk.Contains(builtMethods, mthd.GetFullPath()) {
+			if mthd != nil && !funk.Contains(builtMethods, mthd.GetFullPath()) && mthd.Visibility != "external" {
 				methodContext := buildExecutionContext(mthd.Method.Value, mthd.ToAst(), buildAll)
 				methodContext.ReturnType = mthd.Type
 				ctx.Methods = append(ctx.Methods, methodContext)
 				builtMethods = append(builtMethods, mthd.GetFullPath())
 			}
+
 			ctx.Steps = append(ctx.Steps, &ExecutionStep{
 				MethodCall: buildMethodCallStep(entry.FuncCall, geckoAst),
 			})
@@ -213,7 +224,6 @@ func buildExecutionContext(entries []*tokens.Entry, geckoAst *ast.Ast, buildAll 
 		} else if entry.Else != nil {
 			buildConditional(ctx, entry.Else, geckoAst)
 		} else if entry.Field != nil {
-			repr.Println(entry.Field)
 			name := ""
 			if entry.Field.Visibility == "external" {
 				name = entry.Field.Name
@@ -229,8 +239,11 @@ func buildExecutionContext(entries []*tokens.Entry, geckoAst *ast.Ast, buildAll 
 			})
 		} else if entry.Method != nil && entry.Method.Visibility != "external" && buildAll {
 			mthd := geckoAst.Methods[entry.Method.Name]
+			compileLogger.DebugLogString("building execution context for method", color.HiYellowString("'%s'", entry.Method.Name))
 			if mthd != nil && !funk.Contains(builtMethods, mthd.GetFullPath()) {
-				methodContext := buildExecutionContext(mthd.Method.Value, mthd.ToAst(), buildAll)
+				mthdAst := mthd.ToAst()
+				mthdAst.MergeWithParents()
+				methodContext := buildExecutionContext(mthd.Method.Value, mthdAst, buildAll)
 				methodContext.ReturnType = mthd.Type
 				ctx.Methods = append(ctx.Methods, methodContext)
 				builtMethods = append(builtMethods, mthd.GetFullPath())

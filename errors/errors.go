@@ -5,6 +5,8 @@ import (
 	"io/ioutil"
 	"strings"
 
+	"github.com/neutrino2211/Gecko/logger"
+
 	"github.com/alecthomas/participle/lexer"
 	"github.com/neutrino2211/Gecko/ast"
 )
@@ -14,6 +16,10 @@ type Error struct {
 	Reason string
 	Scope  *ast.Ast
 }
+
+var (
+	errorLogger = &logger.Logger{}
+)
 
 func computeStackTrace(scope *ast.Ast) string {
 	var s = ""
@@ -57,7 +63,6 @@ var ignoreNext = false
 var errorWasIgnored = false
 
 func AddError(err *Error) {
-	println(ignoreNext, errorWasIgnored)
 	if ignoreNext && !errorWasIgnored {
 		errorWasIgnored = true
 		return

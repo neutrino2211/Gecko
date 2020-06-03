@@ -33,6 +33,14 @@
   branch = "master"
   name = "github.com/alecthomas/repr"
 
+[[constraint]]
+  branch = "master"
+  name = "github.com/fatih/color"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/mitchellh/go-homedir"
+
 [prune]
   go-tests = true
   unused-packages = true

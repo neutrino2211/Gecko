@@ -1,8 +1,18 @@
 package commander
 
 import (
+	"bytes"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"text/template"
+
+	"github.com/neutrino2211/Gecko/logger"
+)
+
+var (
+	GlobalOptions = make(map[string]*Optional)
 )
 
 func confirmType(registeredType string, variable interface{}) bool {
@@ -47,13 +57,13 @@ func fetchType(variable interface{}) string {
 
 func getValue(v string) interface{} {
 	var r interface{}
-	r, err := strconv.ParseBool(v)
+	r, err := strconv.ParseInt(v, 0, 32)
 
 	if err == nil {
 		return r
 	}
 
-	r, err = strconv.ParseInt(v, 0, 32)
+	r, err = strconv.ParseBool(v)
 
 	if err == nil {
 		return r
@@ -68,20 +78,126 @@ func getValue(v string) interface{} {
 	return v
 }
 
+type Optional struct {
+	Type        string
+	Description string
+}
+
+type Listener struct {
+	Option *Optional
+	Method func(interface{})
+}
+
 //Command : Interface describing properties held by command
 type Command struct {
+	logger.Logger
+	CommandName string
 	Positionals []string
-	Optionals   map[string]string
+	Optionals   map[string]*Optional
 	Values      map[string]string
+	Usage       string
+	Description string
+	maxSpaceKey uint16
+}
+
+// Init : Here to prevent Logger.Init from overriding a command's Init method
+func (c *Command) Init() {}
+
+func (c *Command) Help() {
+	c.LogString(c.Description)
+}
+
+func (c *Command) GetUsage() string {
+	return c.Usage
+}
+
+func (c *Command) setMaxSpace() {
+	c.maxSpaceKey = 0
+	for o, _ := range c.Optionals {
+		spaces := len(o)
+		if c.maxSpaceKey < uint16(spaces) {
+			c.maxSpaceKey = uint16(spaces)
+		}
+	}
+}
+
+func (c *Command) Space(key string) string {
+	return strings.Repeat(" ", len(key)-int(c.maxSpaceKey))
+}
+
+func (c *Command) BuildHelp(helpTemplate string) string {
+	s := ""
+	buf := bytes.NewBufferString(s)
+
+	c.setMaxSpace()
+
+	helpTemplate += `
+
+	Usage: 
+		{{.Usage}}
+
+	Options:
+	{{range $key, $value := .Optionals}}
+		{{$key}} {{spacer $key}} => {{$value.Description}} [{{$value.Type}}] {{end}}
+
+	`
+
+	tmpl, err := template.New("help").Funcs(template.FuncMap{
+		"spacer": func(key string) string {
+			return strings.Repeat(" ", int(c.maxSpaceKey)-len(key))
+		},
+	}).Parse(helpTemplate)
+	if err != nil {
+		c.DebugLogString(err.Error())
+		c.Fatal("Failed during initialization")
+	}
+
+	err = tmpl.Execute(buf, c)
+
+	if err != nil {
+		c.DebugLogString(err.Error())
+		c.Fatal("Failed during initialization")
+	}
+
+	s = buf.String()
+
+	return s
+}
+func (c *Command) GetBool(key string) bool {
+	r, err := strconv.ParseBool(key)
+
+	if err != nil {
+		c.DebugLogString(err.Error())
+		return false
+	}
+
+	return r
+}
+
+func (c *Command) Name() string {
+	return c.CommandName
+}
+
+func (c *Command) SetName(name string) {
+	c.CommandName = name
 }
 
 func (c *Command) RegisterOptional(option string, value string) {
 	optType := c.Optionals[option]
+
+	if optType == nil {
+		return
+	}
+
 	optValue := getValue(value)
-	isRightType := confirmType(optType, optValue)
+	isRightType := confirmType(optType.Type, optValue)
 
 	if !isRightType {
-		panic("Error: expected type " + optType + " for option '" + option + "' but got " + fetchType(optValue))
+		c.LogString("expected type "+optType.Description+" for option '"+option+"' but got "+fetchType(optValue), "\n\n")
+		c.Init()
+		c.Help()
+
+		os.Exit(1)
 	}
 
 	c.Values[option] = value
@@ -94,32 +210,89 @@ func (c *Command) RegisterPositionals(positionals []string) {
 type Commandable interface {
 	Run()
 	Init()
+	Help()
+	Name() string
+	GetUsage() string
+	SetName(string)
 	RegisterOptional(string, string)
 	RegisterPositionals([]string)
 }
 
 //Commander : Command line parser
 type Commander struct {
-	commands map[string]Commandable
+	logger.Logger
+	commands  map[string]Commandable
+	listeners map[string]*Listener
+	Ready     func()
 }
 
 func (c *Commander) Init() {
+	c.Logger.Init("Gecko", 1)
 	c.commands = make(map[string]Commandable)
+	c.listeners = make(map[string]*Listener)
 }
 
 func (c *Commander) Register(name string, cmd Commandable) {
 	c.commands[name] = cmd
 }
 
+func (c *Commander) RegisterCommands(cmds map[string]Commandable) {
+	for name, cmd := range cmds {
+		c.Register(name, cmd)
+	}
+}
+
+func (c *Commander) RegisterOption(name string, listener *Listener) {
+	c.listeners[name] = listener
+}
+
 // Parse : Parses command line arguments
 func (c *Commander) Parse(cmds []string) {
-	cmdName := cmds[1]
+	cmdName := ""
+	if len(cmds) > 1 {
+		cmdName = cmds[1]
+	}
 	registeredCmd := c.commands[cmdName]
-	registeredCmd.Init()
+
 	// Check if we have that command registered
 	if registeredCmd == nil {
-		panic("Error: command '" + cmdName + "' not found")
+		c.LogString("command '" + cmdName + "' not found")
+
+		fmt.Println("Usage:")
+		fmt.Println("\t", "gecko <command> [arguments]")
+		fmt.Println("\nCommands:\n")
+
+		for cmd, command := range c.commands {
+			command.SetName(cmd)
+			command.Init()
+			command.Help()
+		}
+
+		fmt.Println("\nGlobal Options:\n")
+
+		maxSpaces := 0
+
+		for optName, _ := range c.listeners {
+			if maxSpaces < len(optName) {
+				maxSpaces = len(optName)
+			}
+		}
+
+		for optName, globOption := range c.listeners {
+			spaces := strings.Repeat(" ", maxSpaces-len(optName))
+			fmt.Println("\t", optName+spaces, "=>", globOption.Option.Description, "["+globOption.Option.Type+"]")
+		}
+
+		fmt.Println("")
+
+		os.Exit(1)
 	}
+
+	if registeredCmd.Name() == "" {
+		registeredCmd.SetName(cmdName)
+	}
+
+	registeredCmd.Init()
 
 	positionals := []string{}
 
@@ -129,8 +302,24 @@ func (c *Commander) Parse(cmds []string) {
 			positionals = append(positionals, cmd)
 		} else if strings.HasPrefix(cmd, "--") {
 			i++
-			registeredCmd.RegisterOptional(cmd[2:len(cmd)], cmds[i])
+			option := cmd[2:len(cmd)]
+			listener := c.listeners[option]
+			if len(cmds) > i {
+				registeredCmd.RegisterOptional(option, cmds[i])
+			} else {
+				registeredCmd.RegisterOptional(option, "")
+			}
+
+			if listener != nil && len(cmds) > i {
+				listener.Method(getValue(cmds[i]))
+			} else if listener != nil && listener.Option.Type == "bool" {
+				listener.Method(true)
+			}
 		}
+	}
+
+	if c.Ready != nil {
+		c.Ready()
 	}
 
 	registeredCmd.RegisterPositionals(positionals)

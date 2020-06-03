@@ -168,7 +168,6 @@ func (v *Variable) FromTypeField(tok *tokens.TypeField) {
 }
 
 func (v *Variable) GetFullPath() string {
-	println("getting path for", v.Name, "with scope", v.Scope.GetFullPath())
 	return v.Scope.GetFullPath() + "__" + v.Name
 }
 

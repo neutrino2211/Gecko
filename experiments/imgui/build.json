@@ -1,0 +1,43 @@
+{
+    "type": "executable",
+    "output": "imgui_experiment",
+    "sources": ["imgui.g"],
+    "compiler": "g++",
+    "flags": [
+        "-I./",
+        "-g",
+        "-Wall",
+        "-Wformat",
+        "-I./native/libimgui/gl3w",
+        "-DIMGUI_IMPL_OPENGL_LOADER_GL3W",
+        "-I/usr/local/include",
+        "-I/opt/local/include",
+        "-framework",
+        "OpenGL",
+        "-framework",
+        "Cocoa",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreVideo",
+        "-L/usr/local/lib",
+        "-L/opt/local/lib",
+        "-lglfw"
+    ],
+    "platform": "darwin",
+    "arch": "amd64",
+    "dependencies": [
+        {
+            "type": "library",
+            "output": "./native/libimgui.o",
+            "build": "cd native/ && g++ -c native.cpp -I./libimgui -I./libimgui/gl3w -o native.o && ar cr libimgui.o native.o libimgui/*.o",
+            "dependencies": [
+                {
+                    "type": "library",
+                    "output": "./native/libimgui/imgui.o",
+                    "config": "./native/libimgui/build.json"
+                }
+            ] 
+        }
+    ]
+}

@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/neutrino2211/Gecko/logger"
+
 	"github.com/fatih/color"
 	"github.com/neutrino2211/Gecko/ast"
 	"github.com/neutrino2211/Gecko/commander"
@@ -32,6 +34,10 @@ type buildConfig struct {
 	Root         bool
 	Platform     string
 	Arch         string
+	Build        string
+	Config       string
+	Flags        []string
+	Compiler     string
 
 	Command *CompileCommand
 }
@@ -49,6 +55,7 @@ func streamPipe(std io.ReadCloser) {
 }
 
 func streamCommand(cmd *exec.Cmd) {
+	compileCommandLogger.LogString("executing command:", strings.Join(cmd.Args, " "))
 	stdout, err := cmd.StdoutPipe()
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -101,10 +108,49 @@ func build(sources []string, cfg *buildConfig) []string {
 			if dependency.Arch == "" {
 				dependency.Arch = cfg.Arch
 			}
+
+			if dependency.Compiler == "" {
+				dependency.Compiler = cfg.Compiler
+			}
 			dependency.Command = cfg.Command
 			dependencyOutputs := build([]string{}, dependency)
 			outputs = append(outputs, dependencyOutputs...)
 		}
+	}
+
+	if cfg.Config != "" {
+		depCfg := &buildConfig{}
+		depCfg.Platform = cfg.Platform
+		depCfg.Arch = cfg.Arch
+		depCfg.Command = cfg.Command
+		depCfg.Compiler = cfg.Compiler
+
+		readBuildJson(cfg.Config, depCfg)
+
+		configDir, _ := path.Split(cfg.Config)
+
+		os.Chdir(configDir)
+
+		build([]string{}, depCfg)
+
+		os.Chdir(rootDir)
+	}
+
+	if cfg.Build != "" {
+		rootDir, _ := path.Split(cfg.Command.Values["build"])
+		cfg.Build = strings.ReplaceAll(cfg.Build, "@{root}", rootDir)
+		if len(cfg.Sources) > 0 {
+			cfg.Command.LogString(color.HiYellowString(
+				"warning: build configuration contains both a build command and a list of sources. %s %s",
+				"This might potentially cause issues during build",
+				"["+cfg.Build+"]"))
+		}
+		if runtime.GOOS == "windows" {
+			streamCommand(exec.Command("cmd", cfg.Build))
+		} else {
+			streamCommand(exec.Command("sh", "-c", cfg.Build))
+		}
+		outputs = append(outputs, cfg.Output)
 	}
 
 	for _, inputFile := range inputFiles {
@@ -136,11 +182,11 @@ func build(sources []string, cfg *buildConfig) []string {
 			cfg.Command.LogString("compiling C file", inputFile)
 
 			if format == "executable" {
-				args := []string{"gcc", inputFile, "-o", outputPath}
+				args := []string{cfg.Toolchain + cfg.Compiler, inputFile, "-o", outputPath}
 				cmd := exec.Command(args[0], args[1:len(args)]...)
 				streamCommand(cmd)
 			} else if format == "library" {
-				args := []string{"gcc", "-c", inputFile, "-I.", "-o", outputPath}
+				args := []string{cfg.Toolchain + cfg.Compiler, "-c", inputFile, "-I.", "-o", outputPath}
 				cmd := exec.Command(args[0], args[1:len(args)]...)
 				streamCommand(cmd)
 			}
@@ -151,7 +197,7 @@ func build(sources []string, cfg *buildConfig) []string {
 		}
 
 		if inputFile[len(inputFile)-2:len(inputFile)] != ".g" {
-			break
+			continue
 		}
 
 		_ast := compiler.ParseFile(inputFile)
@@ -259,13 +305,15 @@ func build(sources []string, cfg *buildConfig) []string {
 		}
 
 		if format == "executable" {
-			args := []string{"gcc", "-o", outputPath, filePath}
+			args := []string{cfg.Toolchain + cfg.Compiler, "-o", outputPath, filePath}
 			args = append(args, outputs...)
+			args = append(args, cfg.Flags...)
 			cmd := exec.Command(args[0], args[1:len(args)]...)
 			streamCommand(cmd)
 		} else if format == "library" {
-			args := []string{"gcc", "-I.", "-o", outputPath, "-c", filePath}
+			args := []string{cfg.Toolchain + cfg.Compiler, "-I.", "-o", outputPath, "-c", filePath}
 			args = append(args, outputs...)
+			args = append(args, cfg.Flags...)
 			cfg.Command.DebugLogString("ARGS:", strings.Join(args, " "))
 			cmd := exec.Command(args[0], args[1:len(args)]...)
 			streamCommand(cmd)
@@ -309,7 +357,8 @@ func (c *CompileCommand) Init() {
 
 	c.Values = map[string]string{}
 
-	c.Logger.Init(c.CommandName, 2)
+	compileCommandLogger.Init(c.CommandName, 2)
+	c.Logger = *compileCommandLogger
 	c.Description = c.BuildHelp(help)
 }
 
@@ -320,6 +369,7 @@ func (c *CompileCommand) Run() {
 	cfg.Platform = runtime.GOOS
 	cfg.Arch = runtime.GOARCH
 	cfg.Command = c
+	cfg.Compiler = "gcc"
 
 	if len(c.Values["build"]) != 0 {
 		readBuildJson(c.Values["build"], cfg)
@@ -332,6 +382,10 @@ func (c *CompileCommand) Run() {
 		cfg.Output = c.Values["output"]
 	}
 
+	if cfg.Toolchain != "" {
+		cfg.Toolchain += "-"
+	}
+
 	c.DebugLog(cfg)
 	cfg.Root = true
 
@@ -339,15 +393,19 @@ func (c *CompileCommand) Run() {
 
 	c.DebugLog(outputs)
 
-	if fileExists(outputs[len(outputs)-1]) {
+	if len(outputs) > 1 && fileExists(outputs[len(outputs)-1]) {
 		color.Set(color.FgGreen)
 		c.LogString("output saved to", outputs[len(outputs)-1])
 		color.Unset()
+	} else if len(outputs) == 0 {
+		c.Error("No outputs. There should additional information above above")
 	} else {
 		c.Error("failed to save output to", outputs[len(outputs)-1], ". There should additional information above above")
 	}
 }
 
 var (
-	help = `compiles a gecko source file or a gecko project via a build.json file`
+	help                 = `compiles a gecko source file or a gecko project via a build.json file`
+	compileCommandLogger = &logger.Logger{}
+	rootDir, _           = os.Getwd()
 )

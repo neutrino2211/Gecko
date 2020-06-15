@@ -2,6 +2,7 @@ package evaluate
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/neutrino2211/Gecko/ast"
 	"github.com/neutrino2211/Gecko/errors"
@@ -90,6 +91,14 @@ func unary(un *tokens.Unary, scope *ast.Ast) (interface{}, error) {
 		// repr.Println(scope)
 		if variable == nil && scope.Parent != nil && scope.Parent.Methods[scope.Name] != nil {
 			variable = scope.Parent.Methods[scope.Name].ToAst().Variables[un.Primary.Symbol]
+		} else if strings.Contains(un.Primary.Symbol, ".") {
+			vars := strings.Split(un.Primary.Symbol, ".")
+			variable = scope.Variables[vars[0]]
+
+			if variable != nil {
+				r = variable.GetFullPath() + "." + strings.Join(vars[1:len(vars)], ".")
+				return r, err
+			}
 		}
 
 		if variable != nil {

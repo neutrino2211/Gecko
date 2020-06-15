@@ -1,0 +1,8 @@
+{
+    "type": "executable",
+    "sources": ["classes.g"],
+    "output": "classes_exec",
+    "flags": [
+        "-O3"
+    ]
+}

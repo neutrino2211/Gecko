@@ -61,7 +61,9 @@ func (a *Ast) Initialize() {
 func (a *Ast) Merge(m *Ast) {
 	astLogger.DebugLogString("merging", m.GetFullPath(), "into", color.HiYellowString("'%s'", a.GetFullPath()))
 
-	a.CPreliminary += m.CPreliminary
+	if a.CPreliminary != m.CPreliminary {
+		a.CPreliminary += m.CPreliminary
+	}
 
 	if m.Variables != nil {
 		for _, v := range m.Variables {
@@ -185,6 +187,19 @@ func (m *Method) ToAst() *Ast {
 	ast.Initialize()
 	ast.Name = m.Name
 	ast.Parent = m.Scope
+	for _, arg := range m.Arguments {
+		ast.Variables[arg.Name] = &Variable{
+			Scope: ast,
+			Field: tokens.Field{
+				Visibility: "external",
+				Name:       arg.Name,
+				Type:       arg.Type,
+				Value: &tokens.Literal{
+					Symbol: arg.Name,
+				},
+			},
+		}
+	}
 	return ast
 }
 

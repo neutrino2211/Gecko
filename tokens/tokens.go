@@ -21,18 +21,20 @@ type File struct {
 
 type Entry struct {
 	baseToken
-	CCode    string    `@CCode`
-	ElseIf   *ElseIf   `| @@`
-	Else     *Else     `| @@`
-	If       *If       `| @@`
-	FuncCall *FuncCall `| @@`
-	Method   *Method   `| @@`
-	Class    *Class    `| @@`
-	Type     *Type     `| @@`
-	Schema   *Schema   `| @@`
-	Enum     *Enum     `| @@`
-	Field    *Field    `| @@`
-	Import   string    `| "import" @Ident`
+	CCode      string      `@CCode`
+	Return     *Literal    `| "return" @@`
+	Assignment *Assignment `| @@`
+	ElseIf     *ElseIf     `| @@`
+	Else       *Else       `| @@`
+	If         *If         `| @@`
+	FuncCall   *FuncCall   `| @@`
+	Method     *Method     `| @@`
+	Class      *Class      `| @@`
+	Type       *Type       `| @@`
+	Schema     *Schema     `| @@`
+	Enum       *Enum       `| @@`
+	Field      *Field      `| @@`
+	Import     string      `| "import" @Ident`
 }
 
 // Class tokens
@@ -41,7 +43,7 @@ type Class struct {
 	baseToken
 	Visibility string             `[ @"private" | @"public" | @"protected" ]`
 	Name       string             `"class" @Ident`
-	Extends    []string           `"extends" @Ident { "," @Ident }`
+	Extends    []string           `[ "extends" @Ident { "," @Ident } ]`
 	Fields     []*ClassBlockField `"{" { @@ } "}"`
 }
 
@@ -162,6 +164,12 @@ type Field struct {
 	Value      *Literal `[ "=" @@ ]`
 }
 
+type Assignment struct {
+	baseToken
+	Name  string   `@Ident`
+	Value *Literal `"=" @@`
+}
+
 type TypeField struct {
 	baseToken
 	Name      string   `@Ident`
@@ -175,8 +183,8 @@ type Method struct {
 	Visibility string   `[ @"private" | @"public" | @"protected" | @"external" ]`
 	Name       string   `"func" @Ident`
 	Arguments  []*Value `"(" [ @@ { "," @@ } ] ")"`
-	Type       *TypeRef `":" @@`
-	Value      []*Entry `"{" { @@ } "}"`
+	Type       *TypeRef `[ ":" @@ ]`
+	Value      []*Entry `[ "{" @@* "}" ]`
 }
 
 type Value struct {
@@ -202,19 +210,30 @@ type TypeRef struct {
 
 type Literal struct {
 	baseToken
-	FuncCall   *FuncCall   `( @@`
-	Bool       string      ` | @( "true" | "false" )`
-	Nil        *bool       ` | @"nil"`
-	Expression *Expression ` | @@`
-	String     string      ` | @String`
-	Symbol     string      ` | @Ident`
-	Number     string      ` | @Number`
-	Array      []*Literal  ` | "[" [ @@ { "," @@ } ] "]" )`
-	ArrayIndex *Literal    `[ "[" @@ "]" ]`
+	FuncCall   *FuncCall         `( @@`
+	Bool       string            ` | @( "true" | "false" )`
+	Nil        *bool             ` | @"nil"`
+	Expression *Expression       ` | @@`
+	String     string            ` | @String`
+	Symbol     string            ` | @Ident`
+	Number     string            ` | @Number`
+	Object     []*ObjectKeyValue ` | "{" [ @@ { "," @@ } ] "}"`
+	Array      []*Literal        ` | "[" [ @@ { "," @@ } ] "]" )`
+	ArrayIndex *Literal          `[ "[" @@ "]" ]`
 }
 
 type FuncCall struct {
 	baseToken
 	Function  string      `@Ident`
 	Arguments []*Argument `"(" [ @@ { "," @@ } ] ")"`
+}
+
+type Object struct {
+	baseToken
+}
+
+type ObjectKeyValue struct {
+	baseToken
+	Key   string   `@Ident ":"`
+	Value *Literal `@@`
 }

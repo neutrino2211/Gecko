@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/neutrino2211/Gecko/config"
+	"github.com/neutrino2211/Gecko/errors"
 
 	"github.com/alecthomas/participle"
 	"github.com/alecthomas/participle/lexer"
@@ -112,8 +113,14 @@ func flattenValue(value *tokens.Literal, geckoAst *ast.Ast) {
 	}
 }
 
+func updateMethodAst(a *ast.Ast) {
+	if a.Parent != nil && a.Parent.Methods[a.Name] != nil {
+		a.Merge(CompileEntries(a.Parent.Methods[a.Name].Value, a))
+	}
+}
+
 func ParseFile(filename string) *tokens.File {
-	ast := &tokens.File{}
+	file := &tokens.File{}
 	baseDirectory, _ := path.Split(filename)
 	filePath := string(os.PathSeparator) + filename
 	wd, err := os.Getwd()
@@ -133,11 +140,19 @@ func ParseFile(filename string) *tokens.File {
 			}
 		}
 	}
-	err = parser.Parse(r, ast)
+	err = parser.Parse(r, file)
+	if err != nil {
+		tokErr := err.(participle.UnexpectedTokenError)
+		geckoErr := errors.NewError(tokErr.Unexpected.Pos, "unexpected token "+tokErr.Unexpected.Value+" expected "+tokErr.Expected, &ast.Ast{
+			Name: filename,
+		})
+		compileLogger.Error(geckoErr.String())
+		os.Exit(1)
+	}
 	r.Close()
-	ast.Name = filename
+	file.Name = filename
 
-	return ast
+	return file
 }
 
 func CompileClassEntries(class *tokens.Class) []*tokens.Entry {
@@ -171,17 +186,19 @@ func CompileEntries(entries []*tokens.Entry, geckoAst *ast.Ast) *ast.Ast {
 				}
 			}
 
-			if variable.Value.Array != nil {
+			if variable.Value != nil && variable.Value.Array != nil {
 				flattenArray(variable.Value.Array, geckoAst)
 			}
 			if variable.Visibility == "" {
 				assignSymbolVisibility(variable)
 			}
 			geckoAst.Variables[entry.Field.Name] = variable
+		} else if entry.Assignment != nil {
+
 		} else if entry.Method != nil {
 			method := &ast.Method{}
 			method.FromToken(entry.Method)
-			// repr.Println(method)
+			// compileLogger.DebugLog(method)
 			method.Scope = geckoAst
 			for _, argument := range method.Arguments {
 				if argument.Default != nil {
@@ -211,7 +228,9 @@ func CompileEntries(entries []*tokens.Entry, geckoAst *ast.Ast) *ast.Ast {
 			classAst.Initialize()
 			classAst.Name = entry.Class.Name
 			classEntries := CompileClassEntries(entry.Class)
-			class.Merge(CompileEntries(classEntries, classAst))
+			classAst = CompileEntries(classEntries, classAst)
+			class.Merge(classAst)
+			class.Ast = *classAst
 			class.Parent = geckoAst
 			classAst.Parent = geckoAst
 			class.Class.Name = entry.Class.Name
@@ -265,14 +284,13 @@ func CompilePass(entryFile *tokens.File, geckoAst *ast.Ast, buildAll bool) (*ast
 		}
 	}
 
-	var ctx *ExecutionContext
-
+	ctx := &ExecutionContext{}
 	for _, _import := range entryFile.Imports {
 		importAst := &ast.Ast{}
 		importAst.Name = _import.PackageName
 		importAst.Initialize()
 		compileLogger.DebugLogString("Branching into imported package", color.HiYellowString("'%s'", _import.PackageName))
-		_ast, _ := CompilePass(_import, importAst, buildAll)
+		_ast, compileCtx := CompilePass(_import, importAst, buildAll)
 		geckoAst.CPreliminary = _ast.CPreliminary + geckoAst.CPreliminary
 		if _ast.Name == compiledAst.Name {
 			compileLogger.DebugLogString("imported package", _ast.Name, "is part of the base package", compiledAst.Name)
@@ -280,6 +298,7 @@ func CompilePass(entryFile *tokens.File, geckoAst *ast.Ast, buildAll bool) (*ast
 		} else {
 			compiledAst.MergeImport(_ast)
 		}
+		ctx.Merge(compileCtx)
 	}
 	compiledAst.Merge(geckoAst)
 	compiledAst.Merge(CompileEntries(entryFile.Entries, compiledAst))
@@ -295,6 +314,6 @@ func CompilePass(entryFile *tokens.File, geckoAst *ast.Ast, buildAll bool) (*ast
 
 	// }
 	ctx = buildExecutionContext(entryFile.Entries, compiledAst, buildAll)
-	// ctx.Ast = geckoAst
+	ctx.Ast = compiledAst
 	return compiledAst, ctx
 }

@@ -135,11 +135,11 @@ func (c *Command) BuildHelp(helpTemplate string) string {
 
 	Usage: 
 		{{.Usage}}
-
+	{{if .Optionals}}
 	Options:
 	{{range $key, $value := .Optionals}}
 		{{$key}} {{spacer $key}} => {{$value.Description}} [{{$value.Type}}] {{end}}
-
+	{{end}}
 	`
 
 	tmpl, err := template.New("help").Funcs(template.FuncMap{

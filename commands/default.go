@@ -10,6 +10,7 @@ import (
 
 var GeckoCommands = map[string]commander.Commandable{
 	"compile": &CompileCommand{},
+	"version": &VersionCommand{},
 }
 
 func buildCommandsList(c *DefaultCommand) string {

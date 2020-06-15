@@ -20,7 +20,6 @@ import (
 	"github.com/neutrino2211/Gecko/commander"
 	"github.com/neutrino2211/Gecko/compiler"
 	"github.com/neutrino2211/Gecko/errors"
-	"github.com/neutrino2211/Gecko/tokens"
 )
 
 type buildConfig struct {
@@ -133,7 +132,7 @@ func build(sources []string, cfg *buildConfig) []string {
 
 		build([]string{}, depCfg)
 
-		os.Chdir(rootDir)
+		os.Chdir(invokeDir)
 	}
 
 	if cfg.Build != "" {
@@ -221,20 +220,6 @@ func build(sources []string, cfg *buildConfig) []string {
 		geckoAst := &ast.Ast{}
 		geckoAst.Initialize()
 
-		_ast.Entries = append(_ast.Entries,
-			&tokens.Entry{
-				Field: &tokens.Field{
-					Name: "__version",
-					Type: &tokens.TypeRef{
-						Type: "string",
-					},
-					Value: &tokens.Literal{
-						String: "\"0.0.1\"",
-					},
-				},
-			},
-		)
-
 		cfg.Command.LogString("compiling gecko package", _ast.PackageName)
 		a, ctx := compiler.CompilePass(_ast, geckoAst, true)
 
@@ -255,7 +240,11 @@ func build(sources []string, cfg *buildConfig) []string {
 
 			os.Exit(1)
 		}
-		code := ctx.Code()
+		code := ctx.Code(a)
+
+		code = compiler.GetPreludeCode() + "\n" + code
+
+		compileCommandLogger.DebugLogString(color.HiYellowString("methods"), color.HiYellowString(compiler.GetPreludeCode()))
 
 		codeLines := strings.Split(code, "\n")
 		// fmt.Println(len(codeLines))
@@ -319,6 +308,8 @@ func build(sources []string, cfg *buildConfig) []string {
 			streamCommand(cmd)
 		}
 
+		outputPath = strings.Trim(outputPath, " ")
+
 		outputs = append(outputs, outputPath)
 	}
 
@@ -351,6 +342,10 @@ func (c *CompileCommand) Init() {
 			Type:        "string",
 			Description: "Output file path " + color.HiYellowString("(warning: this overrides the build configuration's output path)"),
 		},
+		"type": &commander.Optional{
+			Type:        "string",
+			Description: "Output type for program. (executable | library)",
+		},
 	}
 
 	c.Usage = "gecko compile sources... [options]"
@@ -359,7 +354,7 @@ func (c *CompileCommand) Init() {
 
 	compileCommandLogger.Init(c.CommandName, 2)
 	c.Logger = *compileCommandLogger
-	c.Description = c.BuildHelp(help)
+	c.Description = c.BuildHelp(compileHelp)
 }
 
 func (c *CompileCommand) Run() {
@@ -370,6 +365,7 @@ func (c *CompileCommand) Run() {
 	cfg.Arch = runtime.GOARCH
 	cfg.Command = c
 	cfg.Compiler = "gcc"
+	cfg.Type = "executable"
 
 	if len(c.Values["build"]) != 0 {
 		readBuildJson(c.Values["build"], cfg)
@@ -380,6 +376,8 @@ func (c *CompileCommand) Run() {
 
 	if c.Values["output"] != "" {
 		cfg.Output = c.Values["output"]
+	} else if cfg.Output == "" {
+		cfg.Output = "gecko.out"
 	}
 
 	if cfg.Toolchain != "" {
@@ -393,19 +391,19 @@ func (c *CompileCommand) Run() {
 
 	c.DebugLog(outputs)
 
-	if len(outputs) > 1 && fileExists(outputs[len(outputs)-1]) {
+	if len(outputs) > 0 && fileExists(outputs[len(outputs)-1]) {
 		color.Set(color.FgGreen)
 		c.LogString("output saved to", outputs[len(outputs)-1])
 		color.Unset()
 	} else if len(outputs) == 0 {
 		c.Error("No outputs. There should additional information above above")
 	} else {
-		c.Error("failed to save output to", outputs[len(outputs)-1], ". There should additional information above above")
+		c.Error("failed to save output to", outputs[len(outputs)-1], ". There should be additional information above above")
 	}
 }
 
 var (
-	help                 = `compiles a gecko source file or a gecko project via a build.json file`
+	compileHelp          = `compiles a gecko source file or a gecko project via a build.json file`
 	compileCommandLogger = &logger.Logger{}
-	rootDir, _           = os.Getwd()
+	invokeDir, _         = os.Getwd()
 )

@@ -16,7 +16,8 @@ var (
 {
 	"stdlibpath": "std",
 	"modulespath": "src",
-	"toolchainpath": "toolchains"
+	"toolchainpath": "toolchains",
+	"version": "0.0.1"
 }
 	`
 	GeckoConfig = &Config{}
@@ -38,6 +39,7 @@ type Config struct {
 	StdLibPath    string
 	ModulesPath   string
 	ToolchainPath string
+	Version       string
 }
 
 func Init() {

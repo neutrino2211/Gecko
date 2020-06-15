@@ -16,6 +16,12 @@ var typeMap = map[string]string{
 	"char *[]": "char **",
 }
 
+var (
+	types              = ""
+	methods            = ""
+	functionSignatures = ""
+)
+
 func addCode(s string, a string) string {
 	return s + a + "\n"
 }
@@ -42,6 +48,10 @@ func randomString(n int) string {
 	}
 
 	return string(b)
+}
+
+func GetPreludeCode() string {
+	return types + "\n" + functionSignatures + "\n" + methods
 }
 
 func GetTypeAsString(v *tokens.TypeRef, geckoAst *ast.Ast) string {
@@ -100,13 +110,13 @@ func CreateMethArgs(args []*tokens.Value, geckoAst *ast.Ast) string {
 
 // }
 
-func codeify(v *tokens.Literal) string {
+func codeify(v *tokens.Literal, ast *ast.Ast) string {
 	if v.Array != nil {
 		// refID := randomString(32)
 		// s := "allocate % " + refID + "\n"
 		arr := "{"
 		for _, v := range v.Array {
-			arr += codeify(v) + ","
+			arr += codeify(v, ast) + ","
 		}
 		arr = arr[0 : len(arr)-1]
 		arr += "}"
@@ -114,6 +124,15 @@ func codeify(v *tokens.Literal) string {
 		// ar := funk.ReverseString(funk.ReverseString(strings.Join(strings.Split(s, "\n"), ","))[1:])
 
 		return arr
+	} else if v.Object != nil {
+		compileLogger.Log(v.Object)
+		obj := "{"
+		for _, o := range v.Object {
+			flattenValue(o.Value, ast)
+			obj += "." + o.Key + " = " + codeify(o.Value, ast) + ","
+		}
+		obj += "}"
+		return obj
 	} else if v.ArrayIndex != nil {
 		return ""
 	} else if len(v.Bool) > 0 {
@@ -122,19 +141,22 @@ func codeify(v *tokens.Literal) string {
 		return v.Number
 	} else if len(v.String) > 0 {
 		return v.String
+	} else if v.FuncCall != nil {
+		methCall := buildMethodCallStep(v.FuncCall, ast).Code(ast)
+		return methCall[0 : len(methCall)-2]
 	} else {
 		return v.Symbol
 	}
 }
 
-func (m *MethodCall) Code() string {
+func (m *MethodCall) Code(scope *ast.Ast) string {
 	s := ""
 	a := ""
 	// repr.Println(m.Arguments)
 	tmpArgs := *m.Arguments
 	for _, argName := range m.ArgumentOrder {
 		k := tmpArgs[argName]
-		instruction := codeify(k)
+		instruction := codeify(k, scope)
 		// identification := funk.ReverseString(strings.Split(funk.ReverseString(strings.Split(instruction, "\n")[0]), " ")[0])
 		// s = addCode(s, instruction)
 		// s = addCode(s, "db "+m.MethodFullName+"__"+a+" @"+identification)
@@ -158,7 +180,7 @@ func (c *Conditional) Code(ast *ast.Ast) string {
 
 	s = addCode(s, "section "+sectionName)
 
-	code := c.Block.Code()
+	code := c.Block.Code(ast)
 	s = addCode(s, code[:len(code)-2])
 
 	s = addCode(s, "ret")
@@ -171,20 +193,60 @@ func (c *Conditional) Code(ast *ast.Ast) string {
 }
 
 func (e *Expression) Code(ast *ast.Ast) string {
-	flattenValue(e.Value, ast)
 
+	if e.Value != nil {
+		flattenValue(e.Value, ast)
+	}
 	if e.Value.FuncCall != nil {
-		return buildMethodCallStep(e.Value.FuncCall, ast).Code()
+		return buildMethodCallStep(e.Value.FuncCall, ast).Code(ast)
 	} else {
-		return /*"auto " + strings.ReplaceAll(e.Name, "||", "::") + " = " +*/ codeify(e.Value)
+		return /*"auto " + strings.ReplaceAll(e.Name, "||", "::") + " = " +*/ codeify(e.Value, ast)
 	}
 	// repr.Println(e.Value)
 	// repr.Println(e)
 	// return "# TODO EVALUATE EXPRESSIONS -> " + e.Name
 }
 
-func (ctx *ExecutionContext) Code() string {
+func (obj *ObjectDefinition) Code(scope *ast.Ast) string {
+	r := "typedef struct {\n"
+
+	for name, variable := range obj.Variables {
+
+		if name == "__ctype__" {
+			continue
+		}
+
+		// [Removed] Reason: Caused implicit truncation
+		// value := ""
+		// if variable.Value != nil {
+		// 	flattenValue(variable.Value, obj.Scope)
+		// 	value = ":" + codeify(variable.Value, scope)
+		// }
+		r = addCode(r, GetTypeAsString(variable.Type, obj.Scope)+" "+name+";")
+	}
+
+	r += "} " + obj.Name + ";"
+	return r
+}
+
+func (ctx *ExecutionContext) Code(scope *ast.Ast) string {
 	s := ""
+
+	for _, class := range ctx.Classes {
+		types = addCode(types, class.Code(scope))
+	}
+
+	for _, mthd := range ctx.Methods {
+		// mthd.As
+		compileLogger.DebugLogString("building method", mthd.Ast.Name)
+		functionSignature := GetTypeAsString(mthd.ReturnType, mthd.Ast) + " " + mthd.Ast.GetFullPath() + " (" + CreateMethArgs(mthd.Ast.Parent.Methods[mthd.Ast.Name].Arguments, mthd.Ast) + ")"
+
+		functionSignatures += functionSignature + ";\n"
+		methodCode := mthd.Code(scope)
+		methods = addCode(methods, functionSignature+"{")
+		methods = addCode(methods, methodCode)
+		methods = addCode(methods, "}")
+	}
 
 	for _, step := range ctx.Steps {
 		var code string
@@ -192,22 +254,22 @@ func (ctx *ExecutionContext) Code() string {
 		if step.Conditional != nil {
 			s = addCode(s, step.Conditional.Code(ctx.Ast))
 		} else if step.MethodCall != nil {
-			s = addCode(s, step.MethodCall.Code())
+			s = addCode(s, step.MethodCall.Code(scope))
 		} else if step.Expression != nil {
-			s = addCode(s, GetTypeAsString(step.Expression.Type, ctx.Ast)+" "+step.Expression.Name+" = "+step.Expression.Code(ctx.Ast)+";")
+			if step.Expression.Value != nil && !step.Expression.IsAssignement {
+				s = addCode(s, GetTypeAsString(step.Expression.Type, ctx.Ast)+" "+step.Expression.Name+" = "+step.Expression.Code(ctx.Ast)+";")
+			} else if step.Expression.IsAssignement {
+				s = addCode(s, step.Expression.Name+" = "+step.Expression.Code(ctx.Ast)+";")
+			} else {
+				s = addCode(s, GetTypeAsString(step.Expression.Type, ctx.Ast)+" "+step.Expression.Name+";")
+			}
+		} else if step.ReturnStep != nil {
+			s = addCode(s, "return "+codeify(step.ReturnStep, scope)+";")
 		}
 
 		if len(code) != 0 {
 			s = addCode(s, code)
 		}
-	}
-
-	for _, mthd := range ctx.Methods {
-		// mthd.As
-		compileLogger.DebugLogString("building method", mthd.Ast.Name)
-		s = addCode(s, GetTypeAsString(mthd.ReturnType, mthd.Ast)+" "+mthd.Ast.GetFullPath()+" ("+CreateMethArgs(mthd.Ast.Parent.Methods[mthd.Ast.Name].Arguments, mthd.Ast)+"){")
-		s = addCode(s, mthd.Code())
-		s = addCode(s, "}")
 	}
 
 	return s

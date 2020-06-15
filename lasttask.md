@@ -40,3 +40,5 @@
 
     [STATUS]
     FIXED
+
+4. Imported functions not being built in final C source

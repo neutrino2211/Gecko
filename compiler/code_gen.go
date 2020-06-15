@@ -3,6 +3,7 @@ package compiler
 import (
 	"math/rand"
 
+	"github.com/fatih/color"
 	"github.com/neutrino2211/Gecko/ast"
 	"github.com/neutrino2211/Gecko/tokens"
 )
@@ -156,6 +157,11 @@ func (m *MethodCall) Code(scope *ast.Ast) string {
 	tmpArgs := *m.Arguments
 	for _, argName := range m.ArgumentOrder {
 		k := tmpArgs[argName]
+		if k == nil && tmpArgs[""] != nil {
+			k = tmpArgs[""]
+		} else if k == nil {
+			compileLogger.Fatal(color.HiRedString("transpile error: %s [%s] requires at least one unnamed argument. None passed", m.MethodFullName, m.MethodName))
+		}
 		instruction := codeify(k, scope)
 		// identification := funk.ReverseString(strings.Split(funk.ReverseString(strings.Split(instruction, "\n")[0]), " ")[0])
 		// s = addCode(s, instruction)

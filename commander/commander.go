@@ -301,9 +301,16 @@ func (c *Commander) Parse(cmds []string) {
 		if !strings.HasPrefix(cmd, "-") {
 			positionals = append(positionals, cmd)
 		} else if strings.HasPrefix(cmd, "--") {
-			i++
 			option := cmd[2:len(cmd)]
 			listener := c.listeners[option]
+
+			if listener != nil && listener.Option.Type == "bool" {
+				listener.Method(true)
+				continue
+			}
+
+			i++
+
 			if len(cmds) > i {
 				registeredCmd.RegisterOptional(option, cmds[i])
 			} else {
@@ -312,8 +319,6 @@ func (c *Commander) Parse(cmds []string) {
 
 			if listener != nil && len(cmds) > i {
 				listener.Method(getValue(cmds[i]))
-			} else if listener != nil && listener.Option.Type == "bool" {
-				listener.Method(true)
 			}
 		}
 	}

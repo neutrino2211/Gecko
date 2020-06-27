@@ -21,6 +21,7 @@ type ExecutionStep struct {
 	MethodCall   *MethodCall
 	Conditional  *Conditional
 	Expression   *Expression
+	Loop         *LoopStep
 	ReturnStep   *tokens.Literal
 	CPreliminary string
 }
@@ -30,6 +31,14 @@ type ObjectDefinition struct {
 	Variables map[string]*ast.Variable
 	Name      string
 	Scope     *ast.Ast
+}
+
+type LoopStep struct {
+	_step
+	SourceArray    *tokens.Literal
+	TargetVariable *ast.Variable
+	Expression     *tokens.Expression
+	Execution      ExecutionContext
 }
 
 type MethodCall struct {
@@ -68,17 +77,34 @@ func (e *ExecutionContext) Init() {
 }
 
 func (e *ExecutionContext) Merge(m *ExecutionContext) {
+	compileLogger.LogString("Merging contexts: ", e.Ast.GetFullPath(), ",", m.Ast.GetFullPath())
 	if m.Steps != nil {
-		e.Steps = append(e.Steps, m.Steps...)
+		for _, step := range e.Steps {
+			if !funk.Contains(e.Steps, step) {
+				e.Steps = append(e.Steps, step)
+			}
+		}
 	}
 
 	if m.Methods != nil {
-		e.Methods = append(e.Methods, m.Methods...)
+		for _, methodDef := range m.Methods {
+			if !funk.Contains(e.Methods, methodDef) {
+				e.Methods = append(e.Methods, methodDef)
+			}
+		}
 	}
 
-	if m.Ast != nil && e.Ast != nil {
-		e.Ast.Merge(m.Ast)
+	if m.Classes != nil {
+		for _, classDef := range m.Classes {
+			if !funk.Contains(e.Classes, classDef) {
+				e.Classes = append(e.Classes, classDef)
+			}
+		}
 	}
+
+	// if m.Ast != nil && e.Ast != nil {
+	// 	e.Ast.Merge(m.Ast)
+	// }
 }
 
 var builtMethods = []string{}
@@ -107,24 +133,28 @@ func classWasBuilt(ctx *ExecutionContext, class string) bool {
 
 func resolveTypeFunction(function string, scope *ast.Ast) *ast.Method {
 	levels := strings.Split(function, ".")
-	compileLogger.Log(levels)
+	// compileLogger.Log(levels)
 
 	if scope.Parent != nil && scope.Parent.Methods[scope.Name] != nil {
 		scope.Merge(CompileEntries(scope.Parent.Methods[scope.Name].Value, scope))
-		scope.MergeWithParents()
 	}
+	scope.MergeWithParents()
 
 	var finalScope = scope
 	var finalLevel string
 
 	for _, level := range levels {
 		finalLevel = level
-		for v, val := range finalScope.Variables {
-			compileLogger.Log(v, val.Name, val.GetFullPath(), level)
-		}
+		// for v, val := range finalScope.Variables {
+		// 	compileLogger.Log(v, val.Name, val.GetFullPath(), level)
+		// }
 
 		if finalScope.Variables[level] != nil {
-			compileLogger.Log(level, finalScope.Variables[level].Type.Type)
+			finalScope.MergeWithParents()
+			// compileLogger.Log(level, finalScope.Variables[level].Type.Type)
+			// for n, _ := range finalScope.Classes {
+			// 	println(color.MagentaString(n), finalScope.GetFullPath())
+			// }
 			finalScope = &finalScope.Classes[finalScope.Variables[level].Type.Type].Ast
 		}
 	}
@@ -210,6 +240,7 @@ func buildMethodCallStep(call *tokens.FuncCall, geckoAst *ast.Ast) *MethodCall {
 		mthd = resolveTypeFunction(call.Function, geckoAst)
 		if mthd != nil { // This is a type function, add the self variable
 			varsList := strings.Split(call.Function, ".")
+			compileLogger.LogString(color.MagentaString(strings.Join(varsList[0:len(varsList)-1], ".")))
 			self := &tokens.Argument{
 				Name: "self",
 				Value: &tokens.Literal{
@@ -410,6 +441,19 @@ func buildExecutionContext(entries []*tokens.Entry, geckoAst *ast.Ast, buildAll 
 			} else {
 				name = geckoAst.GetFullPath() + "__" + entry.Field.Name
 			}
+
+			// class := geckoAst.Classes[entry.Field.Type.Type]
+			// className := entry.Field.Type.Type
+			// if class != nil {
+			// 	ctype := class.Variables["__ctype__"]
+			// 	if ctype != nil && ctype.Value != nil {
+			// 		className = ctype.Value.String
+			// 		className = className[1 : len(className)-1]
+			// 	} else {
+			// 		className = class.Class.Name
+			// 	}
+			// }
+			// entry.Field.Type.Type = className
 			ctx.Steps = append(ctx.Steps, &ExecutionStep{
 				Expression: &Expression{
 					Name:          name,
@@ -432,6 +476,27 @@ func buildExecutionContext(entries []*tokens.Entry, geckoAst *ast.Ast, buildAll 
 					IsAssignement: true,
 				},
 			})
+		} else if entry.Loop != nil {
+			variable := &ast.Variable{}
+			if entry.Loop.ForOf != nil {
+				variable.FromToken(entry.Loop.ForOf.Variable)
+				geckoAst.Parent.Variables[variable.Name] = variable
+				variable.Scope = geckoAst
+				loopContext := buildExecutionContext(entry.Loop.Value, geckoAst, true)
+				// if entry.Loop.ForOf.SourceArray.Expression != nil {
+				flattenValue(entry.Loop.ForOf.SourceArray, geckoAst)
+				// }
+				// compileLogger.Log(entry.Loop.ForOf.SourceArray)
+
+				ctx.Steps = append(ctx.Steps, &ExecutionStep{
+					Loop: &LoopStep{
+						Execution:      *loopContext,
+						TargetVariable: variable,
+						SourceArray:    entry.Loop.ForOf.SourceArray,
+					},
+				})
+			}
+
 		} else if entry.Method != nil && entry.Method.Visibility != "external" && buildAll {
 			mthd := geckoAst.Methods[entry.Method.Name]
 			compileLogger.DebugLogString("building execution context for method", color.HiYellowString("'%s'", entry.Method.Name))

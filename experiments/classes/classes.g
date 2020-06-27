@@ -33,6 +33,7 @@ func Main(argc: int, argv: [string]): int {
     point: int = typeTest.point(index: 22)
 
     // Printing
+    lib.print(val: "Printing Time!!\n\n")
     lib.print(format: "My Variable dereferencing => %u\n", val: typeTest.my_variable)
     lib.print(format:"Gecko version: %s\n", val: returnsString())
     lib.print(format: "Point => %u\n", val: point)

@@ -34,6 +34,7 @@ type Entry struct {
 	Schema     *Schema     `| @@`
 	Enum       *Enum       `| @@`
 	Field      *Field      `| @@`
+	Loop       *Loop       `| @@`
 	Import     string      `| "import" @Ident`
 }
 
@@ -206,6 +207,7 @@ type TypeRef struct {
 	Array       *TypeRef `(   "[" @@ "]"`
 	Type        string   `  | @Ident )`
 	NonNullable bool     `[ @"!" ]`
+	Pointer     bool     `[ @"*" ]`
 }
 
 type Literal struct {
@@ -236,4 +238,25 @@ type ObjectKeyValue struct {
 	baseToken
 	Key   string   `@Ident ":"`
 	Value *Literal `@@`
+}
+
+type Loop struct {
+	baseToken
+	For           string      `"for"`
+	ForOf         *ForOfLoop  `( @@`
+	ForIn         *ForInLoop  ` | @@`
+	ForExpression *Expression ` | @@ )`
+	Value         []*Entry    ` "{" @@* "}" `
+}
+
+type ForOfLoop struct {
+	baseToken
+	Variable    *Field   `@@ "of"`
+	SourceArray *Literal `@@`
+}
+
+type ForInLoop struct {
+	baseToken
+	Variable    *Field   `@@ "in"`
+	SourceArray *Literal `@@`
 }

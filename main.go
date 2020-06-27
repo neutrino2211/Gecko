@@ -53,6 +53,7 @@ func main() {
 			config.Init()
 		},
 	}
+	config.Init()
 	cmd.Init()
 
 	cmd.RegisterOption("debug", &commander.Listener{
@@ -63,6 +64,17 @@ func main() {
 
 		Method: func(number interface{}) {
 			logger.SetDefaultDebugMode(int(number.(int64)))
+		},
+	})
+
+	cmd.RegisterOption("no-stdlib", &commander.Listener{
+		Option: &commander.Optional{
+			Type:        "bool",
+			Description: "Do not include gecko's standard library when building",
+		},
+
+		Method: func(b interface{}) {
+			(*config.GeckoConfig.Options)["no-stdlib"] = "true"
 		},
 	})
 

@@ -6,8 +6,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/thoas/go-funk"
+
 	"github.com/neutrino2211/Gecko/config"
 	"github.com/neutrino2211/Gecko/errors"
+	"github.com/neutrino2211/Gecko/utils"
 
 	"github.com/alecthomas/participle"
 	"github.com/alecthomas/participle/lexer"
@@ -27,7 +30,7 @@ Comment = "//"  { "\u0000"…"\uffff"-"\n" } .
 CCode = "#"  { "\u0000"…"\uffff"-"\n" } .
 Ident = (alpha | "_" | ".") { "_" | "." | alpha | digit } .
 String = "\"" [ { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } ] "\"" .
-Number = ( "0x" | "." | "_" | digit) { "0x" |"." | "_" | digit} .
+Number = ( digit | "0x" | "." | "_" ) { digit | "." | "_" } .
 Whitespace = " " | "\t" | "\n" | "\r" .
 Digit = digit .
 Punct = "!"…"/" | ":"…"@" | "["…` + "\"`\"" + ` | "{"…"~" .
@@ -41,6 +44,8 @@ any = "\u0000"…"\uffff" .
 		participle.Lexer(graphQLLexer),
 		participle.Elide("Comment", "Whitespace"),
 	)
+
+	modulesToBuild = []string{}
 
 	cli struct {
 		Files []string `arg:"" type:"existingfile" required:"" help:"GraphQL schema files to parse."`
@@ -81,9 +86,7 @@ func assignSymbolVisibility(i interface{}) {
 
 func flattenArray(arr []*tokens.Literal, geckoAst *ast.Ast) {
 	for _, v := range arr {
-		if v.Expression != nil {
-			flattenValue(v, geckoAst)
-		}
+		flattenValue(v, geckoAst)
 	}
 }
 
@@ -124,22 +127,53 @@ func ParseFile(filename string) *tokens.File {
 	baseDirectory, _ := path.Split(filename)
 	filePath := string(os.PathSeparator) + filename
 	wd, err := os.Getwd()
-	r, err := os.Open(wd + filePath)
-	compileLogger.DebugLogString("Trying import path", wd+filePath)
-	if err != nil {
-		r, err = os.Open(baseDirectory + filePath)
-		compileLogger.DebugLogString("Trying import path", baseDirectory+filePath)
+	searchDirectories := []string{wd, baseDirectory, config.GeckoConfig.StdLibPath, config.GeckoConfig.ModulesPath}
+
+	var r *os.File
+
+	for _, searchPath := range searchDirectories {
+		compileLogger.DebugLogString("Trying import path", searchPath+filePath)
+		r, err = os.Open(searchPath + filePath)
 		if err != nil {
-			r, err = os.Open(config.GeckoConfig.StdLibPath + filePath)
-			if err != nil {
-				r, err = os.Open(config.GeckoConfig.ModulesPath + filePath)
-				if err != nil {
-					compileLogger.Error("Couldn't resolve import", filename)
-					os.Exit(1)
-				}
-			}
+			compileLogger.DebugLogString("Trying import path", searchPath+filePath[:len(filePath)-2]+"/index.g")
+			r, err = os.Open(searchPath + filePath[:len(filePath)-2] + "/index.g")
+		}
+
+		if err == nil {
+			break
 		}
 	}
+
+	if err != nil {
+		compileLogger.Error("Couldn't resolve import", filename[:len(filename)-2])
+		os.Exit(1)
+	} else {
+		finalFileName := r.Name()
+		potentialBuildPath := path.Join(path.Dir(finalFileName), "build.json")
+		compileLogger.LogString(finalFileName)
+
+		if utils.FileExists(potentialBuildPath) && !funk.ContainsString(modulesToBuild, potentialBuildPath) {
+			modulesToBuild = append(modulesToBuild, potentialBuildPath)
+		}
+	}
+
+	// compileLogger.DebugLogString("Trying import path", wd+filePath)
+	// if err != nil {
+	// 	r, err = os.Open(baseDirectory + filePath)
+	// 	compileLogger.DebugLogString("Trying import path", baseDirectory+filePath)
+	// 	if err != nil {
+	// 		r, err = os.Open(config.GeckoConfig.StdLibPath + filePath)
+	// 		compileLogger.DebugLogString("Trying import path", config.GeckoConfig.StdLibPath+filePath)
+	// 		if err != nil {
+	// 			r, err = os.Open(config.GeckoConfig.ModulesPath + filePath)
+	// 			compileLogger.DebugLogString("Trying import path", config.GeckoConfig.ModulesPath+filePath)
+	// 			if err != nil {
+	// 				compileLogger.Error("Couldn't resolve import", filename)
+	// 				os.Exit(1)
+	// 			}
+	// 		}
+	// 	}
+	// }
 	err = parser.Parse(r, file)
 	if err != nil {
 		tokErr := err.(participle.UnexpectedTokenError)
@@ -193,8 +227,13 @@ func CompileEntries(entries []*tokens.Entry, geckoAst *ast.Ast) *ast.Ast {
 				assignSymbolVisibility(variable)
 			}
 			geckoAst.Variables[entry.Field.Name] = variable
-		} else if entry.Assignment != nil {
-
+		} else if entry.Loop != nil {
+			variable := &ast.Variable{}
+			if entry.Loop.ForOf != nil {
+				variable.FromToken(entry.Loop.ForOf.Variable)
+				geckoAst.Variables[variable.Name] = variable
+				variable.Scope = geckoAst
+			}
 		} else if entry.Method != nil {
 			method := &ast.Method{}
 			method.FromToken(entry.Method)
@@ -276,15 +315,22 @@ func CompilePass(entryFile *tokens.File, geckoAst *ast.Ast, buildAll bool) (*ast
 
 	compileLogger.DebugLogString("Transpiling", color.HiYellowString("'%s'", entryFile.Name))
 
+	// if (*config.GeckoConfig.Options)["no-stdlib"] != "true" {
+	// 	compileLogger.Log(config.GeckoConfig)
+	// 	// entryFile.Entries = append([]*tokens.Entry{&tokens.Entry{
+	// 	// 	Import: "std",
+	// 	// }}, entryFile.Entries...)
+	// }
+
 	for _, entry := range entryFile.Entries {
 		if len(entry.Import) > 0 {
 			importedFilePath := strings.ReplaceAll(entry.Import, ".", string(os.PathSeparator)) + ".g"
-			basePath, _ := path.Split(entryFile.Name)
-			entryFile.Imports = append(entryFile.Imports, ParseFile(path.Join(basePath, importedFilePath)))
+			entryFile.Imports = append(entryFile.Imports, ParseFile(importedFilePath))
 		}
 	}
 
 	ctx := &ExecutionContext{}
+	importedContexts := []*ExecutionContext{}
 	for _, _import := range entryFile.Imports {
 		importAst := &ast.Ast{}
 		importAst.Name = _import.PackageName
@@ -298,7 +344,8 @@ func CompilePass(entryFile *tokens.File, geckoAst *ast.Ast, buildAll bool) (*ast
 		} else {
 			compiledAst.MergeImport(_ast)
 		}
-		ctx.Merge(compileCtx)
+		// ctx.Merge(compileCtx)
+		importedContexts = append(importedContexts, compileCtx)
 	}
 	compiledAst.Merge(geckoAst)
 	compiledAst.Merge(CompileEntries(entryFile.Entries, compiledAst))
@@ -313,7 +360,10 @@ func CompilePass(entryFile *tokens.File, geckoAst *ast.Ast, buildAll bool) (*ast
 	// } else if !isMain {
 
 	// }
-	ctx = buildExecutionContext(entryFile.Entries, compiledAst, buildAll)
 	ctx.Ast = compiledAst
+	for _, importedContext := range importedContexts {
+		ctx.Merge(importedContext)
+	}
+	ctx.Merge(buildExecutionContext(entryFile.Entries, compiledAst, buildAll))
 	return compiledAst, ctx
 }

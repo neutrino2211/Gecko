@@ -1,6 +1,8 @@
 package ast
 
 import (
+	"strings"
+
 	"github.com/fatih/color"
 	"github.com/neutrino2211/Gecko/logger"
 	"github.com/neutrino2211/Gecko/tokens"
@@ -66,9 +68,9 @@ func (a *Ast) Merge(m *Ast) {
 	}
 
 	if m.Variables != nil {
-		for _, v := range m.Variables {
-			if a.Variables[v.Name] == nil {
-				a.Variables[v.Name] = v
+		for n, v := range m.Variables {
+			if a.Variables[n] == nil {
+				a.Variables[n] = v
 			}
 		}
 	}
@@ -84,17 +86,17 @@ func (a *Ast) Merge(m *Ast) {
 	}
 
 	if m.Variables != nil {
-		for _, t := range m.Types {
-			if a.Types[t.Name] == nil {
-				a.Types[t.Name] = t
+		for n, t := range m.Types {
+			if a.Types[n] == nil {
+				a.Types[n] = t
 			}
 		}
 	}
 
 	if m.Classes != nil {
-		for _, c := range m.Classes {
-			if a.Classes[c.Class.Name] == nil {
-				a.Classes[c.Class.Name] = c
+		for n, c := range m.Classes {
+			if a.Classes[n] == nil {
+				a.Classes[n] = c
 			}
 		}
 	}
@@ -102,34 +104,48 @@ func (a *Ast) Merge(m *Ast) {
 
 func (a *Ast) MergeImport(m *Ast) {
 	astLogger.DebugLogString("merging import", m.Name, "into", color.HiYellowString("'%s'", a.Name))
-	for _, v := range m.Variables {
+	for n, v := range m.Variables {
+		if strings.HasPrefix(n, m.Name+".") {
+			n = n[len(m.Name)+1:]
+		}
 		if v.Scope.Name == a.Name && v.Visibility == "protected" {
-			a.Variables[v.Scope.Name+"."+v.Name] = v
+			a.Variables[v.Scope.Name+"."+n] = v
 		} else if v.Visibility == "public" {
-			a.Variables[v.Scope.Name+"."+v.Name] = v
+			a.Variables[v.Scope.Name+"."+n] = v
 		}
 	}
 
-	for _, mthd := range m.Methods {
-		a.Methods[m.Name+"."+mthd.Name] = mthd
-		astLogger.DebugLogString("merging method", m.Name+"."+mthd.Name, "from imported package", m.Name, "into", color.HiYellowString("'%s'", a.Name))
+	for n, mthd := range m.Methods {
+
+		if strings.HasPrefix(n, m.Name+".") {
+			n = n[len(m.Name)+1:]
+		}
+
+		a.Methods[m.Name+"."+n] = mthd
+		astLogger.DebugLogString("merging method", m.Name+"."+n, "from imported package", m.Name, "into", color.HiYellowString("'%s'", a.GetFullPath()))
 	}
 
-	for _, t := range m.Types {
-		a.Types[t.Scope.Name+"."+t.Name] = t
+	for n, t := range m.Types {
+		if strings.HasPrefix(n, m.Name+".") {
+			n = n[len(m.Name)+1:]
+		}
+		a.Types[t.Scope.Name+"."+n] = t
 	}
 
-	for _, c := range m.Classes {
-		a.Classes[c.Parent.Name+"."+c.Class.Name] = c
+	for n, c := range m.Classes {
+		if strings.HasPrefix(n, m.Name+".") {
+			n = n[len(m.Name)+1:]
+		}
+		a.Classes[c.Parent.Name+"."+n] = c
 	}
 }
 
 func (a *Ast) GetFullPath() string {
 	if a.Parent != nil {
-		return a.Parent.GetFullPath() + "__" + a.Name
+		return a.Parent.GetFullPath() + "__" + strings.ReplaceAll(a.Name, ".", "__")
 	}
 
-	return a.Name
+	return strings.ReplaceAll(a.Name, ".", "__")
 }
 
 func (a *Ast) MergeWithParents() {

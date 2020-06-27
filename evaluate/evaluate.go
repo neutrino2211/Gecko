@@ -7,6 +7,7 @@ import (
 	"github.com/neutrino2211/Gecko/ast"
 	"github.com/neutrino2211/Gecko/errors"
 	"github.com/neutrino2211/Gecko/tokens"
+	"github.com/neutrino2211/Gecko/utils"
 )
 
 func flattenArray(arr []*tokens.Literal, geckoAst *ast.Ast) {
@@ -81,31 +82,31 @@ func unary(un *tokens.Unary, scope *ast.Ast) (interface{}, error) {
 	} else if un.Primary.Nil != nil {
 		r = un.Primary.Nil
 	} else if len(un.Primary.Number) > 0 {
+		un.Primary.Number = strings.ReplaceAll(un.Primary.Number, "_", "")
 		r, err = strconv.Atoi(un.Primary.Number)
 	} else if len(un.Primary.String) > 0 {
 		r = un.Primary.String
 	} else if un.Primary.SubExpression != nil {
 		r, err = Evaluate(un.Primary.SubExpression, scope)
 	} else if len(un.Primary.Symbol) > 0 {
-		variable := scope.Variables[un.Primary.Symbol]
-		// repr.Println(scope)
-		if variable == nil && scope.Parent != nil && scope.Parent.Methods[scope.Name] != nil {
-			variable = scope.Parent.Methods[scope.Name].ToAst().Variables[un.Primary.Symbol]
-		} else if strings.Contains(un.Primary.Symbol, ".") {
-			vars := strings.Split(un.Primary.Symbol, ".")
-			variable = scope.Variables[vars[0]]
+		variable := utils.ResolveVariable(scope, un.Primary.Symbol)
 
-			if variable != nil {
-				r = variable.GetFullPath() + "." + strings.Join(vars[1:len(vars)], ".")
-				return r, err
-			}
+		// println(color.HiYellowString("%s", variable))
+		// repr.Println(variable == nil, scope.GetFullPath())
+
+		if strings.Contains(un.Primary.Symbol, ".") && variable != nil {
+			r = strings.Replace(un.Primary.Symbol, strings.Split(un.Primary.Symbol, ".")[0], variable.GetFullPath(), 1)
+			return r, err
 		}
 
 		if variable != nil {
 			// repr.Println(variable.Value)
-			if len(variable.Value.Symbol) > 0 && variable.Scope.Parent != nil {
+			// repr.Println(variable.Value)
+			if variable.Value != nil && len(variable.Value.Symbol) > 0 && variable.Scope.Parent != nil {
 				// repr.Println(variable.Value)
 				// variable.Scope = scope
+				r = variable.GetFullPath()
+			} else if len(un.Primary.Symbol) > 0 {
 				r = variable.GetFullPath()
 			} else {
 				r, err = parseLiteral(variable.Value)

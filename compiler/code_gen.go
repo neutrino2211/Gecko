@@ -2,6 +2,9 @@ package compiler
 
 import (
 	"math/rand"
+	"time"
+
+	"github.com/thoas/go-funk"
 
 	"github.com/fatih/color"
 	"github.com/neutrino2211/Gecko/ast"
@@ -35,6 +38,7 @@ func randomString(n int) string {
 		letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
 	)
 	b := make([]byte, n)
+	rand.Seed(time.Now().UnixNano())
 	// A rand.Int63() generates 63 random bits, enough for letterIdxMax letters!
 	for i, cache, remain := n-1, rand.Int63(), letterIdxMax; i >= 0; {
 		if remain == 0 {
@@ -62,6 +66,19 @@ func GetTypeAsString(v *tokens.TypeRef, geckoAst *ast.Ast) string {
 
 	if geckoAst.Types[tyr.Type] != nil {
 		r += geckoAst.Types[tyr.Type].GetFullPath()
+	} else if geckoAst.Classes[tyr.Type] != nil {
+		class := geckoAst.Classes[tyr.Type]
+		className := tyr.Type
+		if class != nil {
+			ctype := class.Variables["__ctype__"]
+			if ctype != nil && ctype.Value != nil {
+				className = ctype.Value.String
+				className = className[1 : len(className)-1]
+			} else {
+				className = class.Class.Name
+			}
+		}
+		r += className
 	} else {
 		r += tyr.Type
 	}
@@ -72,7 +89,7 @@ func GetTypeAsString(v *tokens.TypeRef, geckoAst *ast.Ast) string {
 
 	if tyr.Array != nil {
 		for tyr.Array != nil {
-			r += "[]"
+			r += "*"
 			tyr = tyr.Array
 		}
 
@@ -150,6 +167,42 @@ func codeify(v *tokens.Literal, ast *ast.Ast) string {
 	}
 }
 
+func (f *LoopStep) Code(scope *ast.Ast) string {
+	// scope.MergeWithParents()
+	// flattenValue(f.SourceArray, scope)
+	// compileLogger.Log(f.SourceArray)
+	counterName := f.TargetVariable.GetFullPath() + randomString(8) + "counter"
+	loopArrayName := scope.GetFullPath() + randomString(8) + "array"
+
+	code := "int " + counterName + " = 0;"
+
+	// f.Execution.Ast.Variables[f.TargetVariable.Name] = nil
+	// scope.Variables[f.TargetVariable.Name] = nil
+
+	delete(scope.Variables, f.TargetVariable.Name)
+	delete(f.Execution.Ast.Variables, f.TargetVariable.Name)
+
+	// scope.MergeWithParents()
+
+	//Remove the
+	for _, step := range f.Execution.Steps {
+		if step.Expression != nil && step.Expression.Name == f.TargetVariable.GetFullPath() && !step.Expression.IsAssignement {
+			step.Expression = nil
+			break
+		}
+	}
+
+	code = addCode(code, "int "+loopArrayName+"[] = "+codeify(f.SourceArray, scope)+";")
+	code = addCode(code, GetTypeAsString(f.TargetVariable.Type, scope)+" "+f.TargetVariable.GetFullPath()+";")
+
+	code = addCode(code, "while("+counterName+"< sizeof("+loopArrayName+")/sizeof("+GetTypeAsString(f.TargetVariable.Type, scope)+")){")
+	code = addCode(code, f.TargetVariable.GetFullPath()+" = "+loopArrayName+"["+counterName+"];")
+	code = addCode(code, f.Execution.Code(scope))
+	code = addCode(code, counterName+"++;\n}")
+
+	return code
+}
+
 func (m *MethodCall) Code(scope *ast.Ast) string {
 	s := ""
 	a := ""
@@ -200,17 +253,22 @@ func (c *Conditional) Code(ast *ast.Ast) string {
 
 func (e *Expression) Code(ast *ast.Ast) string {
 
+	r := ""
 	if e.Value != nil {
 		flattenValue(e.Value, ast)
 	}
 	if e.Value.FuncCall != nil {
-		return buildMethodCallStep(e.Value.FuncCall, ast).Code(ast)
+		r = buildMethodCallStep(e.Value.FuncCall, ast).Code(ast)
 	} else {
-		return /*"auto " + strings.ReplaceAll(e.Name, "||", "::") + " = " +*/ codeify(e.Value, ast)
+		r = /*"auto " + strings.ReplaceAll(e.Name, "||", "::") + " = " +*/ codeify(e.Value, ast)
 	}
 	// repr.Println(e.Value)
 	// repr.Println(e)
 	// return "# TODO EVALUATE EXPRESSIONS -> " + e.Name
+	if r == "" {
+		compileLogger.Fatal(color.RedString("Failed to evaluate expression:"))
+	}
+	return r
 }
 
 func (obj *ObjectDefinition) Code(scope *ast.Ast) string {
@@ -244,14 +302,18 @@ func (ctx *ExecutionContext) Code(scope *ast.Ast) string {
 
 	for _, mthd := range ctx.Methods {
 		// mthd.As
+		if funk.ContainsString(methodsGenerated, mthd.Ast.GetFullPath()) {
+			continue
+		}
+		methodCode := mthd.Code(scope)
 		compileLogger.DebugLogString("building method", mthd.Ast.Name)
 		functionSignature := GetTypeAsString(mthd.ReturnType, mthd.Ast) + " " + mthd.Ast.GetFullPath() + " (" + CreateMethArgs(mthd.Ast.Parent.Methods[mthd.Ast.Name].Arguments, mthd.Ast) + ")"
 
 		functionSignatures += functionSignature + ";\n"
-		methodCode := mthd.Code(scope)
 		methods = addCode(methods, functionSignature+"{")
 		methods = addCode(methods, methodCode)
 		methods = addCode(methods, "}")
+		methodsGenerated = append(methodsGenerated, mthd.Ast.GetFullPath())
 	}
 
 	for _, step := range ctx.Steps {
@@ -271,6 +333,8 @@ func (ctx *ExecutionContext) Code(scope *ast.Ast) string {
 			}
 		} else if step.ReturnStep != nil {
 			s = addCode(s, "return "+codeify(step.ReturnStep, scope)+";")
+		} else if step.Loop != nil {
+			s = addCode(s, step.Loop.Code(scope))
 		}
 
 		if len(code) != 0 {
@@ -280,3 +344,7 @@ func (ctx *ExecutionContext) Code(scope *ast.Ast) string {
 
 	return s
 }
+
+var (
+	methodsGenerated = []string{}
+)

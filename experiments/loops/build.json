@@ -1,0 +1,8 @@
+{
+    "type": "executable",
+    "sources": ["loops.g"],
+    "output": "loops_exec",
+    "flags": [
+        "-O3"
+    ]
+}
